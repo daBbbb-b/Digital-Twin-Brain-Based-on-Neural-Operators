@@ -118,13 +118,16 @@ def generate_pde_data(N: int = 50, T: int = 100, n_samples: int = 100,
         np.random.seed(random_seed)
     
     # Generate connectivity matrix with spatial structure
+    SPATIAL_DECAY_FACTOR = 4  # Controls spatial extent of connectivity
+    CONNECTIVITY_STRENGTH = 0.2
+    
     W = np.zeros((N, N))
     for i in range(N):
         for j in range(N):
             if i != j:
                 # Distance-dependent connectivity
                 distance = abs(i - j)
-                W[i, j] = np.exp(-distance**2 / (2 * (N/4)**2)) * np.random.randn() * 0.2
+                W[i, j] = np.exp(-distance**2 / (2 * (N/SPATIAL_DECAY_FACTOR)**2)) * np.random.randn() * CONNECTIVITY_STRENGTH
     W = (W + W.T) / 2  # Make symmetric
     
     # Initialize storage

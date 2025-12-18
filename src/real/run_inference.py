@@ -176,11 +176,14 @@ if __name__ == '__main__':
     from src.model.fno import FNO
     
     # Create synthetic "real" fMRI data
+    import tempfile
+    
     N, T = 50, 100
     X_real = np.random.randn(N, T).astype(np.float32)
     
     # Save as temporary file
-    temp_fmri_path = '/tmp/test_fmri.npz'
+    with tempfile.NamedTemporaryFile(mode='wb', suffix='.npz', delete=False) as f:
+        temp_fmri_path = f.name
     np.savez(temp_fmri_path, X=X_real)
     print(f"Created test fMRI data: {X_real.shape}")
     
@@ -188,7 +191,8 @@ if __name__ == '__main__':
     model = FNO(N=N, T=T, hidden_channels=16, n_layers=2, modes=8)
     
     # Save model checkpoint
-    temp_checkpoint_path = '/tmp/test_model.pt'
+    with tempfile.NamedTemporaryFile(mode='wb', suffix='.pt', delete=False) as f:
+        temp_checkpoint_path = f.name
     torch.save({
         'epoch': 0,
         'model_state_dict': model.state_dict(),
@@ -199,7 +203,8 @@ if __name__ == '__main__':
     print(f"Created test checkpoint")
     
     # Run inference
-    temp_output_path = '/tmp/test_inference.npz'
+    with tempfile.NamedTemporaryFile(mode='wb', suffix='.npz', delete=False) as f:
+        temp_output_path = f.name
     results = infer_from_real_data(
         fmri_data_path=temp_fmri_path,
         checkpoint_path=temp_checkpoint_path,

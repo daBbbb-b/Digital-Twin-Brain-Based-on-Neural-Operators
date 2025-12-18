@@ -101,12 +101,15 @@ def generate_ode_data(N: int = 50, T: int = 100, n_samples: int = 100,
         np.random.seed(random_seed)
     
     # Generate connectivity matrix (small-world-like structure)
-    W = np.random.randn(N, N) * 0.1
+    CONNECTIVITY_STRENGTH = 0.1
+    SPATIAL_DECAY_FACTOR = 4  # Controls distance-dependent decay
+    
+    W = np.random.randn(N, N) * CONNECTIVITY_STRENGTH
     # Add distance-dependent decay
     for i in range(N):
         for j in range(N):
             distance = abs(i - j)
-            W[i, j] *= np.exp(-distance / (N / 4))
+            W[i, j] *= np.exp(-distance / (N / SPATIAL_DECAY_FACTOR))
     W = (W + W.T) / 2  # Make symmetric
     np.fill_diagonal(W, 0)
     
