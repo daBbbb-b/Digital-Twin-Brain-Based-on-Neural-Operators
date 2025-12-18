@@ -1,0 +1,19 @@
+# Core dependencies
+numpy>=1.21.0
+scipy>=1.7.0
+matplotlib>=3.4.0
+scikit-learn>=1.0.0
+
+# Deep learning
+torch>=1.10.0
+torchvision>=0.11.0
+
+# Data handling
+h5py>=3.0.0
+pyyaml>=5.4.0
+
+# Brain visualization (optional)
+brainspace>=0.1.0
+
+# Additional utilities
+tqdm>=4.60.0

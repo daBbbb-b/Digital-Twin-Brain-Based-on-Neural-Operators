@@ -1,0 +1,83 @@
+# Default configuration for neural operator training
+
+# Data generation
+data:
+  # Simulation type: 'ode' or 'pde'
+  sim_type: 'ode'
+  # Number of brain regions
+  N: 50
+  # Number of time points
+  T: 100
+  # Number of training samples
+  n_train: 800
+  # Number of validation samples
+  n_val: 200
+  # Number of test samples
+  n_test: 200
+  # Random seed
+  random_seed: 42
+  
+  # ODE/PDE parameters
+  tau: 1.0
+  alpha: 0.5
+  diffusion: 0.05  # Only for PDE
+  stimulus_strength: 2.0
+  noise_level: 0.1
+
+# Model architecture
+model:
+  # Model type: 'fno'
+  type: 'fno'
+  # Number of hidden channels
+  hidden_channels: 64
+  # Number of FNO layers
+  n_layers: 4
+  # Number of Fourier modes
+  modes: 16
+
+# Training
+training:
+  # Number of epochs
+  n_epochs: 100
+  # Batch size
+  batch_size: 32
+  # Learning rate
+  learning_rate: 0.001
+  # Early stopping patience (null to disable)
+  early_stopping_patience: 20
+  # Device: 'cpu' or 'cuda'
+  device: 'cpu'
+  # Checkpoint directory
+  checkpoint_dir: 'experiments/checkpoints'
+
+# Inference
+inference:
+  # Batch size for inference
+  batch_size: 64
+  # Device
+  device: 'cpu'
+  # Model checkpoint to use
+  checkpoint: 'experiments/checkpoints/best_model.pt'
+
+# Real data processing
+real_data:
+  # Repetition time (TR) in seconds
+  TR: 2.0
+  # Preprocessing options
+  preprocess: true
+  detrend: true
+  bandpass: true
+  normalize: 'zscore'
+  smooth_sigma: null
+
+# Analysis
+analysis:
+  # Visualization options
+  save_figures: true
+  figure_format: 'png'
+  dpi: 300
+  output_dir: 'experiments/results'
+  
+  # Metrics to compute
+  detailed_metrics: true
+  compute_functional_consistency: false
