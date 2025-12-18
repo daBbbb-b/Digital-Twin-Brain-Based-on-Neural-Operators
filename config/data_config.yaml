@@ -1,0 +1,44 @@
+# 数据配置文件
+
+# 数据根目录
+data_root: "/path/to/data"
+
+# 任务列表文件
+task_file: "tasks.tsv"
+
+# fMRI数据配置
+fmri:
+  tr: 2.0  # 重复时间（秒）
+  n_tasks: 103  # 任务数量
+  data_format: "nifti"  # 数据格式
+  
+# 分区配置
+parcellation:
+  n_parcels: 246  # 分区数量
+  atlas: "Brainnetome"  # 图谱名称
+  
+# 连接性数据配置
+connectivity:
+  # 结构连接
+  structural:
+    cortical_file: "cortical_connectivity.npz"
+    white_matter_file: "white_matter_connectivity.npy"
+    
+  # 有效连接
+  effective:
+    method: "virtual_perturbation"  # 计算方法
+    data_dir: "effective_connectivity/"
+    
+# Surface数据配置
+surface:
+  left_hemisphere: "lh.pial"
+  right_hemisphere: "rh.pial"
+  vertices_per_hemisphere: 10000
+  
+# 预处理配置
+preprocessing:
+  standardize: true
+  detrend: true
+  bandpass_filter:
+    low_freq: 0.01
+    high_freq: 0.1

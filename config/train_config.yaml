@@ -1,0 +1,83 @@
+# 训练配置文件
+
+# 仿真数据训练配置
+simulation_training:
+  # 数据集配置
+  dataset:
+    n_samples: 1000  # 仿真样本数量
+    train_ratio: 0.8
+    val_ratio: 0.1
+    test_ratio: 0.1
+    
+  # 训练超参数
+  hyperparameters:
+    epochs: 100
+    batch_size: 32
+    learning_rate: 0.001
+    weight_decay: 1e-5
+    
+  # 优化器配置
+  optimizer:
+    type: "Adam"
+    betas: [0.9, 0.999]
+    
+  # 学习率调度
+  scheduler:
+    type: "StepLR"
+    step_size: 30
+    gamma: 0.1
+    
+  # 损失函数
+  loss:
+    type: "mse"  # mse, mae, relative
+    
+  # 早停配置
+  early_stopping:
+    patience: 10
+    min_delta: 1e-4
+    
+  # 检查点保存
+  checkpoint:
+    save_freq: 10  # 每10个epoch保存一次
+    save_best: true
+
+# 真实数据微调配置
+real_data_finetuning:
+  # 微调超参数
+  hyperparameters:
+    epochs: 50
+    batch_size: 16
+    learning_rate: 0.0001  # 较小的学习率
+    weight_decay: 1e-4
+    
+  # 层冻结配置
+  freeze:
+    freeze_backbone: true
+    freeze_ratio: 0.8  # 冻结80%的层
+    
+  # 数据增强
+  augmentation:
+    temporal_jitter: true
+    noise_injection: 0.05
+    
+  # 插值配置（处理稀疏监督）
+  interpolation:
+    method: "cubic"  # linear, cubic, spline
+    target_dt: 0.1  # 目标时间间隔（秒）
+    
+  # 正则化
+  regularization:
+    l1_lambda: 0.0
+    l2_lambda: 1e-4
+    dropout: 0.1
+
+# 日志和可视化
+logging:
+  log_dir: "logs/"
+  tensorboard: true
+  log_freq: 10  # 每10步记录一次
+  
+visualization:
+  plot_freq: 20  # 每20个epoch绘制一次
+  save_figures: true
+  figure_dir: "figures/"
