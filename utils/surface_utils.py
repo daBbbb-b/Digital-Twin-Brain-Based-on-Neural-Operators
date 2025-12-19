@@ -10,6 +10,7 @@
 import numpy as np
 from scipy import sparse
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +53,20 @@ def get_mesh_adjacency(faces, n_vertices):
     返回:
         adj: (N, N) 稀疏 CSR 格式的邻接矩阵
     """
+    logger.info(f"开始构建邻接矩阵: {n_vertices} 顶点, {faces.shape[0]} 面")
+    t0 = time.time()
+    
+    # 确保 faces 是 numpy 数组
+    faces = np.asarray(faces)
+    
     # 从三角形生成边: (v0, v1), (v1, v2), (v2, v0)
-    edges_src = np.concatenate([faces[:, 0], faces[:, 1], faces[:, 2]])
-    edges_dst = np.concatenate([faces[:, 1], faces[:, 2], faces[:, 0]])
+    # 使用 numpy 向量化操作
+    v0 = faces[:, 0]
+    v1 = faces[:, 1]
+    v2 = faces[:, 2]
+    
+    edges_src = np.concatenate([v0, v1, v2])
+    edges_dst = np.concatenate([v1, v2, v0])
     
     # 添加对称边
     rows = np.concatenate([edges_src, edges_dst])
@@ -62,13 +74,16 @@ def get_mesh_adjacency(faces, n_vertices):
     
     data = np.ones(len(rows), dtype=int)
     
+    logger.info("创建 COO 矩阵...")
     # 创建稀疏矩阵
     adj = sparse.coo_matrix((data, (rows, cols)), shape=(n_vertices, n_vertices))
     
-    # 移除重复边和自环（尽管在有效网格中不应存在自环）
+    logger.info("转换为 CSR 并二值化...")
+    # 移除重复边和自环
     adj = adj.tocsr()
     adj.data[:] = 1 # 二值化
     
+    logger.info(f"邻接矩阵构建完成，耗时 {time.time() - t0:.4f}s")
     return adj
 
 def compute_surface_laplacian(vertices, faces):
