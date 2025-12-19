@@ -9,9 +9,9 @@
 """
 
 from .ode_models import ODEModel, EIModel
-from .pde_models import PDEModel, DiffusionModel
+from .pde_models import PDEModel, WaveEquationModel
 from .stochastic_models import StochasticODE, StochasticPDE
 from .balloon_model import BalloonModel
 
-__all__ = ['ODEModel', 'EIModel', 'PDEModel', 'DiffusionModel', 
+__all__ = ['ODEModel', 'EIModel', 'PDEModel', 'WaveEquationModel', 
            'StochasticODE', 'StochasticPDE', 'BalloonModel']

@@ -24,150 +24,111 @@
 """
 
 import numpy as np
-from typing import Callable, Optional, Tuple, Dict
-from scipy.integrate import odeint, solve_ivp
-
+from typing import Callable, Optional, Tuple, Dict, Union
 
 class ODEModel:
     """
     ODE模型基类
-    
-    功能：
-        - 定义ODE系统的通用接口
-        - 提供数值求解方法
-        - 支持参数化刺激函数
-        
-    属性：
-        n_nodes (int): 节点数量（脑区数量）
-        params (Dict): 模型参数
-        
-    方法：
-        dynamics: 定义ODE的右侧函数
-        solve: 求解ODE系统
-        set_stimulus: 设置刺激函数
     """
     
     def __init__(self, n_nodes: int, params: Optional[Dict] = None):
-        """
-        初始化ODE模型
+        self.n_nodes = n_nodes
+        self.params = params if params is not None else {}
         
-        参数：
-            n_nodes (int): 节点数量
-            params (Dict, optional): 模型参数字典
+    def dynamics(self, t: float, state: np.ndarray, stimulus: Optional[np.ndarray] = None) -> np.ndarray:
         """
-        pass
-    
-    def dynamics(self, t: float, state: np.ndarray, 
-                connectivity: np.ndarray,
-                stimulus: Optional[Callable] = None) -> np.ndarray:
+        定义ODE的右侧函数 dy/dt = f(t, y, u)
         """
-        定义ODE右侧函数 dx/dt = f(x, t)
-        
-        参数：
-            t (float): 当前时间
-            state (np.ndarray): 当前状态，形状为 (n_nodes * n_variables,)
-            connectivity (np.ndarray): 连接矩阵，形状为 (n_nodes, n_nodes)
-            stimulus (Callable, optional): 刺激函数 s(t, node_idx)
-            
-        返回：
-            np.ndarray: 状态导数 dx/dt
-        """
-        pass
-    
-    def solve(self, 
-             initial_state: np.ndarray,
-             connectivity: np.ndarray,
-             stimulus: Optional[Callable] = None,
-             t_span: Tuple[float, float] = (0, 100),
-             dt: float = 0.01) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        求解ODE系统
-        
-        参数：
-            initial_state (np.ndarray): 初始状态
-            connectivity (np.ndarray): 连接矩阵
-            stimulus (Callable, optional): 刺激函数
-            t_span (Tuple[float, float]): 时间范围 (t_start, t_end)
-            dt (float): 时间步长
-            
-        返回：
-            Tuple[np.ndarray, np.ndarray]: 
-                - 时间数组，形状为 (n_timepoints,)
-                - 状态轨迹，形状为 (n_timepoints, n_nodes * n_variables)
-        """
-        pass
-
+        raise NotImplementedError
 
 class EIModel(ODEModel):
     """
     兴奋-抑制（E-I）模型
     
-    功能：
-        - 实现E-I神经元群体动力学
-        - 考虑兴奋性和抑制性神经元的相互作用
-        - 支持多尺度刺激（神经递质层面、平均发放率层面）
-        
-    状态变量：
-        - E: 兴奋性神经元群体活动
-        - I: 抑制性神经元群体活动
-        
-    参数说明：
-        - w_ee: E到E的连接权重
-        - w_ei: E到I的连接权重
-        - w_ie: I到E的连接权重
-        - w_ii: I到I的连接权重
-        - tau_e: E群体的时间常数
-        - tau_i: I群体的时间常数
-        - gamma_e: E群体的增益参数
-        - gamma_i: I群体的增益参数
-        
-    参考：
-        Pang et al. (2023) 公式(10-16)
+    基于Wilson-Cowan模型或类似的神经质量模型。
+    每个节点包含一个兴奋性群体(E)和一个抑制性群体(I)。
+    
+    状态变量 state: [E_1, ..., E_n, I_1, ..., I_n] (大小为 2 * n_nodes)
     """
     
     def __init__(self, n_nodes: int, params: Optional[Dict] = None):
-        """
-        初始化E-I模型
+        super().__init__(n_nodes, params)
         
-        参数：
-            n_nodes (int): 节点数量
-            params (Dict, optional): 模型参数，包含：
-                - w_ee, w_ei, w_ie, w_ii: 连接权重
-                - tau_e, tau_i: 时间常数
-                - gamma_e, gamma_i: 增益参数
-        """
-        pass
-    
-    def dynamics(self, t: float, state: np.ndarray,
-                connectivity: np.ndarray,
-                stimulus: Optional[Callable] = None) -> np.ndarray:
-        """
-        E-I模型动力学方程
+        # 默认参数 (参考 Deco et al. 或 Pang et al.)
+        self.default_params = {
+            'tau_E': 10.0,   # 兴奋性时间常数 (ms)
+            'tau_I': 20.0,   # 抑制性时间常数 (ms)
+            'w_EE': 1.5,     # E -> E 自连接权重
+            'w_EI': 1.0,     # I -> E 连接权重
+            'w_IE': 1.0,     # E -> I 连接权重
+            'w_II': 0.0,     # I -> I 连接权重
+            'G': 1.0,        # 全局耦合强度 (用于长程连接)
+            'C': None,       # 连接矩阵 (n_nodes x n_nodes), 默认为零矩阵
+            'a_E': 310,      # 增益函数参数
+            'b_E': 125,      # 增益函数参数
+            'd_E': 0.16,     # 增益函数参数
+            'a_I': 615,      # 增益函数参数
+            'b_I': 177,      # 增益函数参数
+            'd_I': 0.087,    # 增益函数参数
+        }
         
-        dE/dt = (-E + f(w_ee * E - w_ei * I + s_E + coupling_E)) / tau_e
-        dI/dt = (-I + f(w_ie * E - w_ii * I + s_I + coupling_I)) / tau_i
+        # 更新参数
+        if params:
+            self.default_params.update(params)
+        self.params = self.default_params
         
-        其中 f 是激活函数，coupling是通过连接矩阵传递的耦合项
-        
-        参数：
-            t (float): 当前时间
-            state (np.ndarray): 当前状态 [E1, ..., En, I1, ..., In]
-            connectivity (np.ndarray): 连接矩阵
-            stimulus (Callable, optional): 刺激函数
+        # 初始化连接矩阵
+        if self.params['C'] is None:
+            self.params['C'] = np.zeros((n_nodes, n_nodes))
             
-        返回：
-            np.ndarray: 状态导数
+    def sigmoid_E(self, x):
+        """兴奋性群体的激活函数"""
+        # H(x) = (a*x - b) / (1 - exp(-d*(a*x - b)))
+        # 这是一个常用的非线性传递函数
+        # 为了数值稳定性，可以使用简单的sigmoid: 1 / (1 + exp(-x))
+        # 这里使用简化的sigmoid形式，或者参考Pang et al.的具体公式
+        # 假设使用简单的sigmoid:
+        return 1.0 / (1.0 + np.exp(-x))
+
+    def sigmoid_I(self, x):
+        """抑制性群体的激活函数"""
+        return 1.0 / (1.0 + np.exp(-x))
+
+    def dynamics(self, t: float, state: np.ndarray, stimulus: Optional[np.ndarray] = None) -> np.ndarray:
         """
-        pass
-    
-    def activation_function(self, x: np.ndarray) -> np.ndarray:
-        """
-        激活函数（如sigmoid或tanh）
+        计算微分方程的导数
         
-        参数：
-            x (np.ndarray): 输入
-            
-        返回：
-            np.ndarray: 激活后的输出
+        state: 形状为 (2 * n_nodes,)
+        stimulus: 形状为 (n_nodes,)，仅作用于E群体（通常假设）
         """
-        pass
+        n = self.n_nodes
+        E = state[:n]
+        I = state[n:]
+        
+        # 获取参数
+        tau_E = self.params['tau_E']
+        tau_I = self.params['tau_I']
+        w_EE = self.params['w_EE']
+        w_EI = self.params['w_EI']
+        w_IE = self.params['w_IE']
+        w_II = self.params['w_II']
+        G = self.params['G']
+        C = self.params['C'] # 连接矩阵
+        
+        # 外部输入
+        u = stimulus if stimulus is not None else np.zeros(n)
+        
+        # 计算输入电流
+        # E群体的输入: 自兴奋 + 长程兴奋(来自其他节点的E) - 局部抑制 + 外部刺激
+        # 注意：长程连接通常是 E -> E
+        # C @ E 表示来自其他节点的输入
+        input_E = w_EE * E - w_EI * I + G * (C @ E) + u
+        
+        # I群体的输入: 局部兴奋 - 自抑制
+        input_I = w_IE * E - w_II * I
+        
+        # 计算导数
+        dE_dt = (-E + self.sigmoid_E(input_E)) / tau_E
+        dI_dt = (-I + self.sigmoid_I(input_I)) / tau_I
+        
+        return np.concatenate([dE_dt, dI_dt])

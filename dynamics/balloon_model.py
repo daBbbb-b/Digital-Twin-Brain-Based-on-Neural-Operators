@@ -48,138 +48,148 @@ class BalloonModel:
         - f: 血流量（flow）
         - v: 血容量（volume）
         - q: 脱氧血红蛋白含量
-        - z: 神经活动输入
-        - E: 氧提取率
-        
-    参数说明：
-        - κ (kappa): 信号衰减率
-        - γ (gamma): 自动调节率
-        - τ (tau): 平均传输时间
-        - α (alpha): 血管顺应性参数
-        - E0: 静息氧提取率
-        - V0: 静息血容量分数
-        - k1, k2, k3: BOLD信号系数
-        
-    属性：
-        params (Dict): 血氧动力学参数
-        
-    方法：
-        hemodynamic_response: 计算血氧动力学响应
-        neural_to_bold: 将神经活动转换为BOLD信号
-        bold_to_neural: 逆问题（BOLD信号反推神经活动）
     """
     
     def __init__(self, params: Optional[Dict] = None):
-        """
-        初始化气球模型
-        
-        参数：
-            params (Dict, optional): 血氧动力学参数，默认使用标准参数：
-                - kappa: 0.65 (1/s)
-                - gamma: 0.41 (1/s)
-                - tau: 0.98 (s)
-                - alpha: 0.32
-                - E0: 0.34
-                - V0: 0.02
-                - k1: 7 * E0
-                - k2: 2
-                - k3: 2 * E0 - 0.2
-        """
-        pass
-    
-    def hemodynamic_equations(self,
-                             state: np.ndarray,
-                             t: float,
-                             neural_input: np.ndarray) -> np.ndarray:
-        """
-        血氧动力学微分方程组
-        
-        参数：
-            state (np.ndarray): 当前状态 [s, f, v, q]
-            t (float): 当前时间
-            neural_input (np.ndarray): 神经活动输入 z(t)
-            
-        返回：
-            np.ndarray: 状态导数 [ds/dt, df/dt, dv/dt, dq/dt]
-        """
-        pass
-    
-    def oxygen_extraction(self, flow: float, E0: float) -> float:
-        """
-        计算氧提取率 E(f, E0)
-        
-        E(f, E0) = 1 - (1 - E0)^(1/f)
-        
-        参数：
-            flow (float): 血流量 f
-            E0 (float): 静息氧提取率
-            
-        返回：
-            float: 氧提取率
-        """
-        pass
-    
-    def compute_bold(self, state: np.ndarray) -> float:
+        # 默认参数 (Friston et al., 2003)
+        self.default_params = {
+            'kappa': 0.65,  # 信号衰减率
+            'gamma': 0.41,  # 流量依赖性消除率
+            'tau': 0.98,    # 血流动力学传递时间
+            'alpha': 0.32,  # Grubb指数
+            'E0': 0.4,      # 静息氧摄取分数
+            'V0': 0.04,     # 静息血容量分数
+            'k1': 7 * 0.4,  # BOLD常数 k1 = 7 * E0
+            'k2': 2.0,      # BOLD常数
+            'k3': 2 * 0.4 - 0.2, # BOLD常数 k3 = 2 * E0 - 0.2
+            'dt': 0.001     # 积分时间步长 (s)
+        }
+        if params:
+            self.default_params.update(params)
+        self.params = self.default_params
+
+    def compute_bold(self, neural_activity: np.ndarray, t_span: np.ndarray) -> np.ndarray:
         """
         计算BOLD信号
         
-        y = V0 * (k1*(1-q) + k2*(1-q/v) + k3*(1-v))
-        
-        参数：
-            state (np.ndarray): 状态 [s, f, v, q]
+        参数:
+            neural_activity: 神经活动时间序列 (n_time_steps, n_nodes)
+            t_span: 时间点数组 (n_time_steps,)
             
-        返回：
-            float: BOLD信号值
+        返回:
+            bold_signal: BOLD信号 (n_time_steps, n_nodes)
         """
-        pass
-    
-    def neural_to_bold(self,
-                      neural_timeseries: np.ndarray,
-                      dt: float = 0.01,
-                      downsample_factor: int = 1) -> np.ndarray:
-        """
-        将神经活动时间序列转换为BOLD信号
+        n_time_steps, n_nodes = neural_activity.shape
         
-        参数：
-            neural_timeseries (np.ndarray): 神经活动，形状为 (n_timepoints, n_regions)
-            dt (float): 时间步长（秒）
-            downsample_factor (int): 下采样因子（用于匹配fMRI的TR=2秒）
-            
-        返回：
-            np.ndarray: BOLD信号，形状为 (n_timepoints_bold, n_regions)
-            
-        注意：
-            - 输入神经活动通常以较高时间分辨率（如dt=0.01s）
-            - 输出BOLD信号匹配fMRI的TR（如2秒）
-        """
-        pass
-    
-    def get_hrf(self, duration: float = 32.0, dt: float = 0.01) -> np.ndarray:
-        """
-        获取血氧动力学响应函数（HRF）
+        # 初始状态 (s=0, f=1, v=1, q=1)
+        # 状态向量: [s, f, v, q] * n_nodes
+        # 为了方便odeint，我们将状态展平: [s_1...s_n, f_1...f_n, v_1...v_n, q_1...q_n]
+        initial_state = np.concatenate([
+            np.zeros(n_nodes), # s
+            np.ones(n_nodes),  # f
+            np.ones(n_nodes),  # v
+            np.ones(n_nodes)   # q
+        ])
         
-        通过向模型输入单位脉冲刺激获得HRF
-        
-        参数：
-            duration (float): HRF持续时间（秒）
-            dt (float): 时间步长
+        # 定义ODE系统
+        def balloon_dynamics(state, t):
+            # 找到当前时间对应的神经活动 (简单的插值或最近邻)
+            # 这里假设t_span是均匀的，直接计算索引
+            idx = int(np.clip(np.searchsorted(t_span, t), 0, n_time_steps - 1))
+            z = neural_activity[idx]
             
-        返回：
-            np.ndarray: HRF时间序列
-        """
-        pass
-    
-    def convolve_with_hrf(self,
-                         neural_timeseries: np.ndarray,
-                         hrf: Optional[np.ndarray] = None) -> np.ndarray:
-        """
-        使用HRF卷积神经活动（简化方法）
-        
-        参数：
-            neural_timeseries (np.ndarray): 神经活动
-            hrf (np.ndarray, optional): HRF，如果为None则自动生成
+            s = state[0*n_nodes : 1*n_nodes]
+            f = state[1*n_nodes : 2*n_nodes]
+            v = state[2*n_nodes : 3*n_nodes]
+            q = state[3*n_nodes : 4*n_nodes]
             
-        返回：
-            np.ndarray: 卷积后的信号（近似BOLD信号）
-        """
-        pass
+            kappa = self.params['kappa']
+            gamma = self.params['gamma']
+            tau = self.params['tau']
+            alpha = self.params['alpha']
+            E0 = self.params['E0']
+            
+            # 限制f和v为正值以避免数值错误
+            f = np.maximum(f, 1e-6)
+            v = np.maximum(v, 1e-6)
+            
+            # 氧摄取分数 E(f) = 1 - (1-E0)^(1/f)
+            E_f = 1 - (1 - E0)**(1.0 / f)
+            
+            ds = z - kappa * s - gamma * (f - 1)
+            df = s
+            dv = (f - v**(1/alpha)) / tau
+            dq = (f * E_f / E0 - q * v**(1/alpha - 1)) / tau
+            
+            return np.concatenate([ds, df, dv, dq])
+        
+        # 求解ODE
+        # 注意：odeint可能会使用自适应步长，这里我们强制使用t_span
+        # 但为了效率，我们可能需要自己实现简单的欧拉积分，因为neural_activity是离散的
+        # 使用简单的欧拉积分通常足够且更快
+        
+        dt = t_span[1] - t_span[0]
+        states = np.zeros((n_time_steps, 4 * n_nodes))
+        states[0] = initial_state
+        
+        current_state = initial_state
+        
+        # 欧拉积分循环
+        # 为了稳定性，如果dt太大，进行子步积分
+        internal_dt = 0.01 # 10ms or smaller is better for Balloon model stability
+        steps_per_sample = int(np.ceil(dt / internal_dt))
+        real_dt = dt / steps_per_sample
+        
+        for i in range(1, n_time_steps):
+            z = neural_activity[i-1]
+            
+            for _ in range(steps_per_sample):
+                s = current_state[0*n_nodes : 1*n_nodes]
+                f = current_state[1*n_nodes : 2*n_nodes]
+                v = current_state[2*n_nodes : 3*n_nodes]
+                q = current_state[3*n_nodes : 4*n_nodes]
+                
+                kappa = self.params['kappa']
+                gamma = self.params['gamma']
+                tau = self.params['tau']
+                alpha = self.params['alpha']
+                E0 = self.params['E0']
+                
+                # 限制范围防止溢出
+                f = np.clip(f, 1e-4, 100.0)
+                v = np.clip(v, 1e-4, 100.0)
+                q = np.clip(q, 1e-4, 100.0)
+                s = np.clip(s, -100.0, 100.0)
+                
+                E_f = 1 - (1 - E0)**(1.0 / f)
+                
+                ds = z - kappa * s - gamma * (f - 1)
+                df = s
+                dv = (f - v**(1/alpha)) / tau
+                dq = (f * E_f / E0 - q * v**(1/alpha - 1)) / tau
+                
+                # 更新状态
+                s_new = s + ds * real_dt
+                f_new = f + df * real_dt
+                v_new = v + dv * real_dt
+                q_new = q + dq * real_dt
+                
+                current_state = np.concatenate([s_new, f_new, v_new, q_new])
+            
+            states[i] = current_state
+            
+        # 计算BOLD信号
+        V0 = self.params['V0']
+        k1 = self.params['k1']
+        k2 = self.params['k2']
+        k3 = self.params['k3']
+        
+        v_all = states[:, 2*n_nodes : 3*n_nodes]
+        q_all = states[:, 3*n_nodes : 4*n_nodes]
+        
+        # 避免除零
+        v_all = np.maximum(v_all, 1e-6)
+        
+        y = V0 * (k1 * (1 - q_all) + k2 * (1 - q_all / v_all) + k3 * (1 - v_all))
+        
+        return y

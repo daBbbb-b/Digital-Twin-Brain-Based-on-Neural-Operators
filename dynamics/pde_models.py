@@ -6,11 +6,11 @@
 
 主要类：
     PDEModel: PDE模型基类
-    DiffusionModel: 扩散模型
+    WaveEquationModel: 波动方程模型 (Damped Wave Equation)
 
 输入：
     - 初始状态：皮层上的神经活动分布
-    - 皮层结构连接：定义扩散路径的几何结构
+    - 皮层结构连接：定义扩散路径的几何结构 (Graph Laplacian)
     - 刺激函数：空间和时间相关的外部刺激
     - 扩散参数：扩散系数等
 
@@ -20,176 +20,105 @@
 
 参考：
     Pang et al. (2023) "Geometric constraints on human brain function"
-    公式(9)：PDE扩散方程
+    公式(9)：PDE扩散/波动方程
 """
 
 import numpy as np
-from typing import Callable, Optional, Tuple, Dict
-from scipy.sparse import csr_matrix
-from scipy.sparse.linalg import spsolve
-
+from typing import Callable, Optional, Tuple, Dict, Union
+from scipy.sparse import csr_matrix, diags
+import scipy.sparse as sparse
 
 class PDEModel:
     """
     PDE模型基类
-    
-    功能：
-        - 定义PDE系统的通用接口
-        - 提供数值求解方法（有限差分、有限元等）
-        - 支持空间-时间变化的刺激
-        
-    属性：
-        n_vertices (int): 皮层顶点数量
-        params (Dict): 模型参数
-        
-    方法：
-        spatial_operator: 定义空间算子（如Laplacian）
-        time_step: 执行一个时间步
-        solve: 求解PDE系统
     """
     
-    def __init__(self, n_vertices: int, params: Optional[Dict] = None):
-        """
-        初始化PDE模型
+    def __init__(self, n_nodes: int, params: Optional[Dict] = None):
+        self.n_nodes = n_nodes
+        self.params = params if params is not None else {}
+        self.laplacian = None
         
-        参数：
-            n_vertices (int): 皮层顶点数量
-            params (Dict, optional): 模型参数
+    def set_laplacian(self, adjacency_matrix: Union[np.ndarray, csr_matrix]):
         """
-        pass
-    
-    def spatial_operator(self, 
-                        state: np.ndarray,
-                        cortical_connectivity: csr_matrix) -> np.ndarray:
+        计算图拉普拉斯矩阵 L = D - A
+        支持稀疏矩阵
         """
-        定义空间微分算子
+        if sparse.issparse(adjacency_matrix):
+            degree = np.array(adjacency_matrix.sum(axis=1)).flatten()
+            D = sparse.diags(degree)
+            self.laplacian = D - adjacency_matrix
+        else:
+            degree = np.sum(adjacency_matrix, axis=1)
+            D = np.diag(degree)
+            self.laplacian = D - adjacency_matrix
         
-        参数：
-            state (np.ndarray): 当前状态，形状为 (n_vertices,)
-            cortical_connectivity (csr_matrix): 皮层结构连接（稀疏矩阵）
-            
-        返回：
-            np.ndarray: 空间算子作用后的结果
-        """
-        pass
-    
-    def time_step(self,
-                 state: np.ndarray,
-                 cortical_connectivity: csr_matrix,
-                 stimulus: Optional[np.ndarray] = None,
-                 dt: float = 0.01) -> np.ndarray:
-        """
-        执行一个时间步的更新
+        # 归一化 (可选)
+        # d_inv_sqrt = np.power(degree, -0.5)
+        # d_inv_sqrt[np.isinf(d_inv_sqrt)] = 0
+        # D_inv_sqrt = np.diag(d_inv_sqrt)
+        # self.laplacian = np.eye(self.n_nodes) - D_inv_sqrt @ adjacency_matrix @ D_inv_sqrt
         
-        参数：
-            state (np.ndarray): 当前状态
-            cortical_connectivity (csr_matrix): 皮层结构连接
-            stimulus (np.ndarray, optional): 当前时刻的空间刺激
-            dt (float): 时间步长
-            
-        返回：
-            np.ndarray: 更新后的状态
-        """
-        pass
-    
-    def solve(self,
-             initial_state: np.ndarray,
-             cortical_connectivity: csr_matrix,
-             stimulus: Optional[Callable] = None,
-             t_span: Tuple[float, float] = (0, 100),
-             dt: float = 0.01) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        求解PDE系统
-        
-        参数：
-            initial_state (np.ndarray): 初始状态
-            cortical_connectivity (csr_matrix): 皮层结构连接
-            stimulus (Callable, optional): 刺激函数 s(t, vertex_idx)
-            t_span (Tuple[float, float]): 时间范围
-            dt (float): 时间步长
-            
-        返回：
-            Tuple[np.ndarray, np.ndarray]:
-                - 时间数组
-                - 状态轨迹，形状为 (n_timepoints, n_vertices)
-        """
-        pass
+    def dynamics(self, t: float, state: np.ndarray, stimulus: Optional[np.ndarray] = None) -> np.ndarray:
+        raise NotImplementedError
 
-
-class DiffusionModel(PDEModel):
+class WaveEquationModel(PDEModel):
     """
-    扩散模型
+    阻尼波动方程模型 (Damped Wave Equation)
     
-    功能：
-        - 在皮层结构上模拟神经活动的扩散过程
-        - 考虑几何约束和解剖连接
-        - 支持非均匀扩散系数
-        
-    PDE方程：
-        ∂u/∂t = D * ∇²u + s(x, t)
-        
-        其中：
-        - u: 神经活动
-        - D: 扩散系数
-        - ∇²: Laplacian算子（在皮层surface上）
-        - s: 刺激函数
-        
-    参数说明：
-        - diffusion_coef: 扩散系数 D
-        - decay_rate: 衰减率
-        - nonlinearity: 非线性项参数
-        
-    参考：
-        Pang et al. (2023) 公式(9)
+    d^2u/dt^2 + gamma * du/dt + c^2 * L * u = F(u) + stimulus
+    
+    状态变量 state: [u, v] 其中 v = du/dt
     """
     
-    def __init__(self, n_vertices: int, params: Optional[Dict] = None):
-        """
-        初始化扩散模型
+    def __init__(self, n_nodes: int, params: Optional[Dict] = None):
+        super().__init__(n_nodes, params)
         
-        参数：
-            n_vertices (int): 皮层顶点数量
-            params (Dict, optional): 模型参数，包含：
-                - diffusion_coef: 扩散系数
-                - decay_rate: 衰减率
-        """
-        pass
-    
-    def compute_laplacian(self, cortical_connectivity: csr_matrix) -> csr_matrix:
-        """
-        计算皮层surface上的Laplacian矩阵
+        self.default_params = {
+            'gamma': 0.5,    # 阻尼系数
+            'c': 10.0,       # 传播速度
+            'L': None,       # 拉普拉斯矩阵
+            'activation': 'sigmoid' # 非线性激活函数
+        }
+        if params:
+            self.default_params.update(params)
+        self.params = self.default_params
         
-        参数：
-            cortical_connectivity (csr_matrix): 皮层结构连接
+        if self.params['L'] is not None:
+            self.laplacian = self.params['L']
             
-        返回：
-            csr_matrix: Laplacian矩阵
-        """
-        pass
-    
-    def spatial_operator(self,
-                        state: np.ndarray,
-                        cortical_connectivity: csr_matrix) -> np.ndarray:
-        """
-        扩散算子：D * L * u - decay * u
-        
-        参数：
-            state (np.ndarray): 当前状态
-            cortical_connectivity (csr_matrix): 皮层结构连接
+    def sigmoid(self, x):
+        return 1.0 / (1.0 + np.exp(-x))
             
-        返回：
-            np.ndarray: 扩散算子作用后的结果
+    def dynamics(self, t: float, state: np.ndarray, stimulus: Optional[np.ndarray] = None) -> np.ndarray:
         """
-        pass
-    
-    def add_nonlinearity(self, state: np.ndarray) -> np.ndarray:
+        计算导数
+        state: [u, v] (2 * n_nodes)
         """
-        添加非线性项（如饱和效应）
+        n = self.n_nodes
+        u = state[:n]
+        v = state[n:]
         
-        参数：
-            state (np.ndarray): 当前状态
+        gamma = self.params['gamma']
+        c = self.params['c']
+        
+        if self.laplacian is None:
+            raise ValueError("Laplacian matrix not set. Call set_laplacian() first.")
             
-        返回：
-            np.ndarray: 添加非线性项后的状态
-        """
-        pass
+        # 外部输入
+        inp = stimulus if stimulus is not None else np.zeros(n)
+        
+        # 波动方程
+        # du/dt = v
+        # dv/dt = -gamma * v - c^2 * L * u + sigmoid(u) + inp
+        
+        du_dt = v
+        
+        # 计算 Laplacian * u
+        Lu = self.laplacian @ u
+        
+        # 非线性项 (可选，模拟神经元激活)
+        nonlinear_term = self.sigmoid(u)
+        
+        dv_dt = -gamma * v - (c**2) * Lu + nonlinear_term + inp
+        
+        return np.concatenate([du_dt, dv_dt])

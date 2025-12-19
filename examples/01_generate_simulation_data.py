@@ -14,114 +14,185 @@
     - 数据统计报告
 
 使用方法：
-    python examples/01_generate_simulation_data.py --config config/data_config.yaml
+    python examples/01_generate_simulation_data.py
 """
 
 import sys
-sys.path.append('..')
-
+import os
 import numpy as np
+import pandas as pd
 from pathlib import Path
+import logging
+import pickle
 
-from simulation import ODESimulator, PDESimulator
-from connectivity import StructuralConnectivity, WhiteMatterConnectivity
-from utils import IOUtils, Logger
+# 添加父目录到路径
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from simulation.ode_simulator import ODESimulator
+from simulation.pde_simulator import PDESimulator
+from simulation.stimulation_generator import StimulationGenerator
+
+# 配置日志
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    handlers=[
+                        logging.FileHandler("simulation_generation.log"),
+                        logging.StreamHandler()
+                    ])
+logger = logging.getLogger("SimulationDataGeneration")
+
+def load_connectivity(file_path):
+    """加载连接矩阵"""
+    try:
+        df = pd.read_csv(file_path, header=None)
+        return df.values
+    except Exception as e:
+        logger.error(f"Failed to load connectivity from {file_path}: {e}")
+        return None
+
+def generate_dummy_ec(n_nodes):
+    """生成虚拟有效连接矩阵 (EC)"""
+    # 随机生成一个稀疏矩阵作为EC
+    ec = np.random.randn(n_nodes, n_nodes) * 0.1
+    # 稀疏化
+    mask = np.random.rand(n_nodes, n_nodes) > 0.8
+    ec = ec * mask
+    np.fill_diagonal(ec, 0)
+    return ec
 
 def main():
-    """
-    主函数：生成仿真数据
-    
-    步骤：
-    1. 加载配置
-    2. 初始化仿真器
-    3. 生成ODE仿真数据
-    4. 生成PDE仿真数据
-    5. 保存数据集
-    6. 生成统计报告
-    """
-    
-    # 设置日志
-    logger = Logger('SimulationDataGeneration')
     logger.info("开始生成仿真数据...")
     
-    # 加载配置
-    config = IOUtils.load_config('config/data_config.yaml')
-    
-    # 初始化ODE仿真器
-    logger.info("生成ODE仿真数据...")
-    ode_simulator = ODESimulator(model_type='EI', n_nodes=246)
-    
-    # 生成ODE数据集
-    # 覆盖不同的刺激脑区、刺激方式、有效连接、白质连接
-    ode_dataset = ode_simulator.generate_dataset(
-        n_samples=1000,
-        vary_connectivity=True,
-        vary_stimulus=True,
-        connectivity_types=['effective', 'white_matter'],
-        add_noise=True  # 包含随机ODE
-    )
-    
-    # 保存ODE数据集
-    save_path = Path('data/simulation/ode_dataset.pkl')
-    IOUtils.create_directory(save_path.parent)
-    ode_simulator.save_dataset(ode_dataset, str(save_path))
-    logger.info(f"ODE数据集已保存到 {save_path}")
-    
-    # 初始化PDE仿真器
-    logger.info("生成PDE仿真数据...")
-    pde_simulator = PDESimulator(model_type='diffusion', n_vertices=10000)
-    
-    # 生成PDE数据集
-    # 覆盖不同的空间刺激位置和模式
-    pde_dataset = pde_simulator.generate_dataset(
-        n_samples=500,
-        vary_cortical_connectivity=True,
-        vary_stimulus=True,
-        add_noise=True  # 包含随机PDE
-    )
-    
-    # 保存PDE数据集
-    save_path = Path('data/simulation/pde_dataset.pkl')
-    pde_simulator.save_dataset(pde_dataset, str(save_path))
-    logger.info(f"PDE数据集已保存到 {save_path}")
-    
-    # 生成数据统计报告
-    logger.info("生成数据统计报告...")
-    report = f"""
-    仿真数据生成报告
-    ==================
-    
-    ODE数据集：
-    - 样本数量: {ode_dataset['metadata']['n_samples']}
-    - 节点数量: {ode_dataset['metadata']['n_nodes']}
-    - 时间范围: {ode_dataset['metadata']['t_span']}
-    - 包含噪声: {ode_dataset['metadata']['has_noise']}
-    
-    PDE数据集：
-    - 样本数量: {pde_dataset['metadata']['n_samples']}
-    - 顶点数量: {pde_dataset['metadata']['n_vertices']}
-    - 时间范围: {pde_dataset['metadata']['t_span']}
-    - 包含噪声: {pde_dataset['metadata']['has_noise']}
-    
-    数据集覆盖：
-    - ✓ 不同的刺激脑区
-    - ✓ 不同的刺激方式
-    - ✓ 不同的有效连接
-    - ✓ 不同的白质结构连接
-    - ✓ 不同的皮层结构连接
-    - ✓ ODE和PDE方程
-    - ✓ 随机噪声项
-    """
-    
-    print(report)
-    
-    # 保存报告
-    with open('data/simulation/generation_report.txt', 'w', encoding='utf-8') as f:
-        f.write(report)
-    
-    logger.info("仿真数据生成完成！")
+    # --- 配置区域 ---
+    # 设置为 True 以启用对应的仿真生成，设置为 False 以跳过
+    ENABLE_ODE_EC = False   # 基于有效连接(EC)的ODE仿真
+    ENABLE_ODE_SC = False   # 基于结构连接(SC)的ODE仿真
+    ENABLE_PDE_SURF = True # 基于皮层表面的PDE仿真
+    # ----------------
 
+    # 路径设置
+    project_root = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    dataset_dir = project_root / 'dataset'
+    output_dir = dataset_dir / 'simulation_data'
+    output_dir.mkdir(exist_ok=True)
+    
+    # 1. 加载数据
+    bna_path = dataset_dir / 'BNA_matrix_binary_246x246.csv'
+    sc_matrix = load_connectivity(bna_path)
+    
+    if sc_matrix is None:
+        logger.error("无法加载SC矩阵，使用随机矩阵代替进行测试。")
+        sc_matrix = np.random.rand(246, 246) > 0.9
+        sc_matrix = sc_matrix.astype(float)
+        
+    n_nodes = sc_matrix.shape[0]
+    logger.info(f"加载SC矩阵，大小: {sc_matrix.shape}")
+    
+    # 2. 生成EC矩阵 (模拟)
+    ec_matrix = generate_dummy_ec(n_nodes)
+    logger.info("生成虚拟EC矩阵")
+    
+    # 3. 仿真参数
+    dt = 0.5 # ms (稍微大一点以加快速度)
+    duration = 20000.0 # 20s
+    n_samples = 5 # 生成样本数
+    
+    # 初始化 ODE 仿真器和刺激生成器 (如果需要)
+    ode_sim = None
+    stim_gen = None
+    if ENABLE_ODE_EC or ENABLE_ODE_SC:
+        ode_sim = ODESimulator(n_nodes=n_nodes, dt=dt, duration=duration, model_type='EI')
+        stim_gen = StimulationGenerator(n_nodes, dt, duration)
 
-if __name__ == '__main__':
+    # 4. ODE仿真 (基于EC)
+    if ENABLE_ODE_EC:
+        logger.info("开始ODE仿真 (基于EC)...")
+        
+        for i in range(n_samples):
+            # 随机生成刺激
+            onset = np.random.uniform(2000, 15000)
+            stim_dur = np.random.uniform(1000, 5000)
+            target_nodes = np.random.choice(n_nodes, size=10, replace=False).tolist()
+            
+            stimulus = stim_gen.generate_boxcar(onset, stim_dur, amplitude=0.5, nodes=target_nodes)
+            
+            # 运行仿真
+            results = ode_sim.run_simulation(connectivity=ec_matrix, stimulus=stimulus, noise_level=0.02)
+            
+            # 保存结果
+            save_path = output_dir / f'ode_ec_sample_{i}.pkl'
+            with open(save_path, 'wb') as f:
+                pickle.dump(results, f)
+            logger.info(f"保存ODE样本 {i} 到 {save_path}")
+    else:
+        logger.info("跳过 ODE仿真 (基于EC)")
+        
+    # 5. ODE仿真 (基于SC - 白质)
+    if ENABLE_ODE_SC:
+        logger.info("开始ODE仿真 (基于SC)...")
+        for i in range(n_samples):
+            onset = np.random.uniform(2000, 15000)
+            stim_dur = np.random.uniform(1000, 5000)
+            target_nodes = np.random.choice(n_nodes, size=10, replace=False).tolist()
+            
+            stimulus = stim_gen.generate_boxcar(onset, stim_dur, amplitude=0.5, nodes=target_nodes)
+            
+            results = ode_sim.run_simulation(connectivity=sc_matrix, stimulus=stimulus, noise_level=0.02)
+            
+            save_path = output_dir / f'ode_sc_sample_{i}.pkl'
+            with open(save_path, 'wb') as f:
+                pickle.dump(results, f)
+            logger.info(f"保存ODE(SC)样本 {i} 到 {save_path}")
+    else:
+        logger.info("跳过 ODE仿真 (基于SC)")
+        
+    # 6. PDE仿真 (基于皮层Surface)
+    if ENABLE_PDE_SURF:
+        logger.info("开始PDE仿真 (基于皮层Surface)...")
+        
+        from utils import surface_utils
+        # 假设只仿真左半球
+        surf_file = dataset_dir / 'T103/anat/sub-01_hemi-L_midthickness.surf.gii'
+        
+        if surf_file.exists() and surface_utils.HAS_NIBABEL:
+            try:
+                vertices, faces = surface_utils.load_surface(surf_file)
+                n_vertices = vertices.shape[0]
+                logger.info(f"加载左半球Surface: {n_vertices} 顶点")
+                
+                surf_adj = surface_utils.get_mesh_adjacency(faces, n_vertices)
+                
+                pde_sim = PDESimulator(n_nodes=n_vertices, dt=dt, duration=duration, model_type='wave')
+                
+                for i in range(n_samples):
+                    # 随机刺激参数
+                    onset = np.random.uniform(2000, 15000)
+                    stim_dur = np.random.uniform(1000, 5000)
+                    target_nodes = np.random.choice(n_vertices, size=5, replace=False).tolist()
+                    amplitude = 1.0
+                    
+                    # 定义刺激函数 (闭包)
+                    def stimulus_func(t):
+                        val = np.zeros(n_vertices)
+                        if onset <= t < onset + stim_dur:
+                            val[target_nodes] = amplitude
+                        return val
+                    
+                    results = pde_sim.run_simulation(connectivity=surf_adj, stimulus=stimulus_func, noise_level=0.01)
+                    
+                    save_path = output_dir / f'pde_surf_sample_{i}.pkl'
+                    with open(save_path, 'wb') as f:
+                        pickle.dump(results, f)
+                    logger.info(f"保存PDE(Surface)样本 {i} 到 {save_path}")
+                    
+            except Exception as e:
+                logger.error(f"Surface PDE仿真失败: {e}")
+        else:
+            logger.warning("无法加载Surface文件或nibabel未安装，跳过Surface PDE仿真。")
+    else:
+        logger.info("跳过 PDE仿真 (基于皮层Surface)")
+        
+    logger.info("仿真数据生成完成。")
+
+if __name__ == "__main__":
     main()

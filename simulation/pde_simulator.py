@@ -16,195 +16,130 @@ PDE仿真器模块
 输出：
     - 仿真数据集：包含输入（皮层连接、空间刺激）和输出（时空序列）
     - 元数据
-
-使用示例：
-    simulator = PDESimulator(model_type='diffusion', n_vertices=10000)
-    dataset = simulator.generate_dataset(n_samples=500,
-                                         vary_cortical_connectivity=True)
 """
 
 import numpy as np
-from typing import Dict, List, Optional, Tuple
-from scipy.sparse import csr_matrix
-from ..dynamics import PDEModel, DiffusionModel, StochasticPDE
-from .stimulation_generator import StimulationGenerator
-from .noise_generator import NoiseGenerator
+from typing import Dict, List, Optional, Tuple, Union,Callable
+import sys
+import os
 
+# 添加父目录到路径以导入其他模块
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from dynamics.pde_models import PDEModel, WaveEquationModel
+from dynamics.balloon_model import BalloonModel
+from simulation.stimulation_generator import StimulationGenerator
 
 class PDESimulator:
     """
     PDE仿真数据生成器
-    
-    功能：
-        - 在皮层surface上生成PDE仿真
-        - 变化皮层结构连接、空间刺激模式
-        - 支持确定性和随机PDE
-        - 处理高维空间数据（皮层顶点数量可达数万）
-        
-    数据集要求：
-        - 覆盖不同的空间刺激位置
-        - 覆盖不同的刺激空间模式（局部、分散、全局）
-        - 覆盖不同的皮层结构连接
-        - 包含空间相关噪声项（随机PDE）
-        
-    属性：
-        model_type (str): PDE模型类型
-        n_vertices (int): 皮层顶点数量
-        pde_model: PDE动力学模型
-        stim_generator: 刺激生成器
-        noise_generator: 噪声生成器
-        
-    方法：
-        generate_single_sample: 生成单个PDE仿真样本
-        generate_dataset: 生成完整数据集
-        create_spatial_stimulus: 创建空间刺激模式
-        vary_cortical_connectivity: 变化皮层连接
     """
     
-    def __init__(self,
-                 model_type: str = 'diffusion',
-                 n_vertices: int = 10000,
-                 params: Optional[Dict] = None):
-        """
-        初始化PDE仿真器
+    def __init__(self, 
+                 n_nodes: int = 246, 
+                 dt: float = 0.1, 
+                 duration: float = 60000.0, 
+                 model_type: str = 'wave',
+                 model_params: Optional[Dict] = None):
         
-        参数：
-            model_type (str): PDE模型类型
-            n_vertices (int): 皮层顶点数量
-            params (Dict, optional): 模型参数
-        """
-        pass
-    
-    def generate_single_sample(self,
-                              cortical_connectivity: csr_matrix,
-                              spatial_stimulus_params: Dict,
-                              t_span: Tuple[float, float] = (0, 50),
-                              dt: float = 0.01,
-                              add_noise: bool = True) -> Dict:
-        """
-        生成单个PDE仿真样本
+        self.n_nodes = n_nodes
+        self.dt = dt
+        self.duration = duration
+        self.time_points = np.arange(0, duration, dt)
+        self.n_time_steps = len(self.time_points)
         
-        参数：
-            cortical_connectivity (csr_matrix): 皮层结构连接（稀疏矩阵）
-            spatial_stimulus_params (Dict): 空间刺激参数
-                - stimulus_centers: 刺激中心位置（顶点索引）
-                - spatial_spread: 空间扩散范围
-                - amplitude: 刺激幅度
-                - temporal_pattern: 时间模式
-            t_span (Tuple[float, float]): 时间范围
-            dt (float): 时间步长
-            add_noise (bool): 是否添加空间相关噪声
+        if model_type == 'wave':
+            self.model = WaveEquationModel(n_nodes, model_params)
+        else:
+            raise ValueError(f"Unknown model type: {model_type}")
             
-        返回：
-            Dict: 包含
-                - 'cortical_connectivity': 皮层连接矩阵
-                - 'spatial_stimulus': 空间刺激 (n_timepoints, n_vertices)
-                - 'spatiotemporal_activity': 时空活动 (n_timepoints, n_vertices)
-                - 'time': 时间数组
-                - 'params': 参数信息
-        """
-        pass
-    
-    def generate_dataset(self,
-                        n_samples: int = 500,
-                        vary_cortical_connectivity: bool = True,
-                        vary_stimulus: bool = True,
-                        t_span: Tuple[float, float] = (0, 50),
-                        dt: float = 0.01,
-                        add_noise: bool = True) -> Dict:
-        """
-        生成PDE仿真数据集
+        self.balloon_model = BalloonModel()
+        self.stim_generator = StimulationGenerator(n_nodes, dt, duration)
         
-        参数：
-            n_samples (int): 样本数量
-            vary_cortical_connectivity (bool): 是否变化皮层连接
-            vary_stimulus (bool): 是否变化刺激
-            t_span (Tuple[float, float]): 时间范围
-            dt (float): 时间步长
-            add_noise (bool): 是否添加噪声
+    def run_simulation(self, 
+                       connectivity: Union[np.ndarray, object], 
+                       stimulus: Optional[Union[np.ndarray, Callable]] = None,
+                       noise_level: float = 0.01,
+                       initial_state: Optional[np.ndarray] = None) -> Dict:
+        """
+        运行单次PDE仿真
+        """
+        # 设置拉普拉斯矩阵
+        self.model.set_laplacian(connectivity)
+        
+        # 内存优化：不预先生成所有噪声
+        # noise = self.stim_generator.generate_noise(sigma=noise_level, color='white')
+        
+        if initial_state is None:
+            # Wave equation state: [u, v]
+            initial_state = np.zeros(2 * self.n_nodes)
             
-        返回：
-            Dict: 数据集字典，包含
-                - 'cortical_connectivities': 连接矩阵列表
-                - 'spatial_stimuli': 空间刺激数组
-                - 'spatiotemporal_activities': 时空活动数组
-                - 'metadata': 元数据
-        """
-        pass
-    
-    def create_spatial_stimulus(self,
-                               n_vertices: int,
-                               stimulus_centers: List[int],
-                               spatial_spread: float,
-                               amplitude: float,
-                               cortical_coords: Optional[np.ndarray] = None) -> np.ndarray:
-        """
-        创建空间刺激模式
+        # 内存优化：如果节点数太多，不保存所有状态？
+        # 但我们需要计算BOLD，需要历史。
+        # 如果N很大(32k)，T=40k，states大小为 40000 * 64000 * 8 bytes = 20GB!
+        # 我们必须在线计算BOLD或者降采样保存。
         
-        使用高斯核在空间上分布刺激
+        # 策略：只保存降采样后的神经活动
+        downsample_factor = int(10 / self.dt) # 10ms resolution
+        if downsample_factor < 1: downsample_factor = 1
         
-        参数：
-            n_vertices (int): 顶点数量
-            stimulus_centers (List[int]): 刺激中心顶点索引
-            spatial_spread (float): 空间扩散范围（mm）
-            amplitude (float): 刺激幅度
-            cortical_coords (np.ndarray, optional): 皮层坐标
+        n_saved_steps = (self.n_time_steps + downsample_factor - 1) // downsample_factor
+        saved_neural_activity = np.zeros((n_saved_steps, self.n_nodes), dtype=np.float32)
+        
+        current_state = initial_state
+        saved_idx = 0
+        
+        # 保存初始状态
+        if 0 % downsample_factor == 0:
+             saved_neural_activity[0] = current_state[:self.n_nodes]
+             saved_idx += 1
+        
+        for i in range(1, self.n_time_steps):
+            t = self.time_points[i-1]
             
-        返回：
-            np.ndarray: 空间刺激分布 (n_vertices,)
-        """
-        pass
-    
-    def vary_cortical_connectivity(self,
-                                   base_connectivity: csr_matrix,
-                                   variation_type: str = 'random',
-                                   variation_strength: float = 0.1) -> csr_matrix:
-        """
-        变化皮层结构连接
-        
-        参数：
-            base_connectivity (csr_matrix): 基础皮层连接
-            variation_type (str): 变化类型
-            variation_strength (float): 变化强度
+            # 生成当前步噪声
+            noise_t = np.random.normal(0, noise_level, self.n_nodes)
             
-        返回：
-            csr_matrix: 变化后的皮层连接
-        """
-        pass
-    
-    def vary_spatial_stimulus_parameters(self, n_vertices: int) -> Dict:
-        """
-        随机生成空间刺激参数
-        
-        参数：
-            n_vertices (int): 顶点数量
+            # 获取当前步刺激
+            u = noise_t
+            if stimulus is not None:
+                if callable(stimulus):
+                    u += stimulus(t)
+                elif isinstance(stimulus, np.ndarray):
+                    u += stimulus[i-1]
             
-        返回：
-            Dict: 空间刺激参数
-        """
-        pass
-    
-    def downsample_spatial_activity(self,
-                                   activity: np.ndarray,
-                                   parcellation: np.ndarray) -> np.ndarray:
-        """
-        将高分辨率皮层活动下采样到脑区水平
-        
-        参数：
-            activity (np.ndarray): 皮层顶点活动 (n_timepoints, n_vertices)
-            parcellation (np.ndarray): 分区标签 (n_vertices,)
+            d_state = self.model.dynamics(t, current_state, stimulus=u)
+            current_state = current_state + d_state * self.dt
             
-        返回：
-            np.ndarray: 脑区活动 (n_timepoints, n_regions)
-        """
-        pass
-    
-    def save_dataset(self, dataset: Dict, save_path: str):
-        """
-        保存PDE数据集（使用稀疏矩阵格式节省空间）
+            # 简单的数值稳定性限制
+            current_state = np.clip(current_state, -10, 10)
+            
+            # 降采样保存
+            if i % downsample_factor == 0:
+                saved_neural_activity[saved_idx] = current_state[:self.n_nodes]
+                saved_idx += 1
+            
+        # 提取u作为神经活动
+        neural_activity = saved_neural_activity
         
-        参数：
-            dataset (Dict): 数据集
-            save_path (str): 保存路径
-        """
-        pass
+        # 归一化到0-1之间以便输入Balloon模型 (假设u代表膜电位偏差)
+        # sigmoid已经在模型里了，但这里我们取出来的值可能需要调整
+        neural_activity_norm = 1.0 / (1.0 + np.exp(-neural_activity))
+        
+        # Balloon模型计算
+        # 注意：Balloon模型内部也会消耗内存，如果N很大。
+        # BalloonModel.compute_bold 需要 (T_down, N)
+        # T_down ~ 2000, N ~ 32000 -> 64M floats -> 256MB. 这是可以接受的。
+        
+        time_points_down = self.time_points[::downsample_factor]
+        # 确保长度匹配
+        time_points_down = time_points_down[:len(neural_activity_norm)]
+        
+        bold_signal = self.balloon_model.compute_bold(neural_activity_norm, time_points_down)
+        
+        return {
+            'time_points': time_points_down,
+            'neural_activity': neural_activity_norm, # 已经是降采样的
+            'bold_signal': bold_signal,
+            # 'stimulus': ... # 刺激太大，不保存完整历史
+        }

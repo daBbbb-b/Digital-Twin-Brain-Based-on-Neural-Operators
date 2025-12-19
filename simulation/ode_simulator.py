@@ -16,182 +16,143 @@ ODE仿真器模块
 输出：
     - 仿真数据集：包含输入（连接矩阵、刺激函数）和输出（时间序列）
     - 元数据：仿真参数、数据统计信息
-
-使用示例：
-    simulator = ODESimulator(model_type='EI', n_nodes=246)
-    dataset = simulator.generate_dataset(n_samples=1000, 
-                                         vary_connectivity=True,
-                                         vary_stimulus=True)
 """
 
 import numpy as np
-from typing import Dict, List, Optional, Tuple
-from ..dynamics import ODEModel, EIModel, StochasticODE
-from .stimulation_generator import StimulationGenerator
-from .noise_generator import NoiseGenerator
+from typing import Dict, List, Optional, Tuple, Union
+import sys
+import os
 
+# 添加父目录到路径以导入其他模块
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from dynamics.ode_models import ODEModel, EIModel
+from dynamics.balloon_model import BalloonModel
+from simulation.stimulation_generator import StimulationGenerator
 
 class ODESimulator:
     """
     ODE仿真数据生成器
-    
-    功能：
-        - 生成大量仿真样本
-        - 变化连接矩阵、刺激模式、噪声等参数
-        - 覆盖不同的刺激脑区和刺激方式
-        - 支持确定性和随机ODE
-        
-    数据集要求（评价标准）：
-        - 覆盖不同的刺激脑区
-        - 覆盖不同的刺激方式（幅度、频率、时间模式）
-        - 覆盖不同的有效连接模式
-        - 覆盖不同的白质结构连接
-        - 包含噪声项（随机ODE）
-        
-    属性：
-        model_type (str): 模型类型（'EI', 'Wilson-Cowan'等）
-        n_nodes (int): 节点数量
-        ode_model: ODE动力学模型
-        stim_generator: 刺激生成器
-        noise_generator: 噪声生成器
-        
-    方法：
-        generate_single_sample: 生成单个仿真样本
-        generate_dataset: 生成完整数据集
-        vary_connectivity: 变化连接矩阵
-        save_dataset: 保存数据集
     """
     
     def __init__(self, 
+                 n_nodes: int = 246, 
+                 dt: float = 0.1, 
+                 duration: float = 60000.0, # 1 minute
                  model_type: str = 'EI',
-                 n_nodes: int = 246,
-                 params: Optional[Dict] = None):
-        """
-        初始化ODE仿真器
+                 model_params: Optional[Dict] = None):
         
-        参数：
-            model_type (str): 模型类型
-            n_nodes (int): 节点数量
-            params (Dict, optional): 模型参数
-        """
-        pass
-    
-    def generate_single_sample(self,
-                              connectivity: np.ndarray,
-                              stimulus_params: Dict,
-                              t_span: Tuple[float, float] = (0, 100),
-                              dt: float = 0.01,
-                              add_noise: bool = True,
-                              noise_intensity: float = 0.1) -> Dict:
-        """
-        生成单个仿真样本
+        self.n_nodes = n_nodes
+        self.dt = dt
+        self.duration = duration
+        self.time_points = np.arange(0, duration, dt)
+        self.n_time_steps = len(self.time_points)
         
-        参数：
-            connectivity (np.ndarray): 连接矩阵
-            stimulus_params (Dict): 刺激参数
-                - stimulus_type: 刺激类型
-                - target_regions: 目标脑区
-                - amplitude: 刺激幅度
-                - duration: 刺激持续时间
-                - onset_time: 刺激开始时间
-            t_span (Tuple[float, float]): 时间范围
-            dt (float): 时间步长
-            add_noise (bool): 是否添加噪声
-            noise_intensity (float): 噪声强度
+        # 初始化模型
+        if model_type == 'EI':
+            self.model = EIModel(n_nodes, model_params)
+        else:
+            raise ValueError(f"Unknown model type: {model_type}")
             
-        返回：
-            Dict: 包含以下键的字典
-                - 'connectivity': 连接矩阵
-                - 'stimulus': 刺激函数（离散化）
-                - 'timeseries': 神经活动时间序列
-                - 'time': 时间数组
-                - 'params': 参数信息
-        """
-        pass
-    
-    def generate_dataset(self,
-                        n_samples: int = 1000,
-                        vary_connectivity: bool = True,
-                        vary_stimulus: bool = True,
-                        connectivity_types: List[str] = ['effective', 'white_matter'],
-                        t_span: Tuple[float, float] = (0, 100),
-                        dt: float = 0.01,
-                        add_noise: bool = True) -> Dict:
-        """
-        生成完整的仿真数据集
+        # 初始化血氧动力学模型
+        self.balloon_model = BalloonModel()
         
-        参数：
-            n_samples (int): 样本数量
-            vary_connectivity (bool): 是否变化连接矩阵
-            vary_stimulus (bool): 是否变化刺激参数
-            connectivity_types (List[str]): 连接类型列表
-            t_span (Tuple[float, float]): 时间范围
-            dt (float): 时间步长
-            add_noise (bool): 是否添加噪声
+        # 初始化刺激生成器
+        self.stim_generator = StimulationGenerator(n_nodes, dt, duration)
+        
+    def run_simulation(self, 
+                       connectivity: np.ndarray, 
+                       stimulus: Optional[np.ndarray] = None,
+                       noise_level: float = 0.01,
+                       initial_state: Optional[np.ndarray] = None) -> Dict:
+        """
+        运行单次仿真
+        
+        参数:
+            connectivity: 连接矩阵 (n_nodes, n_nodes)
+            stimulus: 外部刺激 (n_time_steps, n_nodes)
+            noise_level: 噪声水平
+            initial_state: 初始状态
             
-        返回：
-            Dict: 数据集字典，包含
-                - 'connectivities': 连接矩阵数组 (n_samples, n_nodes, n_nodes)
-                - 'stimuli': 刺激函数数组 (n_samples, n_timepoints, n_nodes)
-                - 'timeseries': 时间序列数组 (n_samples, n_timepoints, n_nodes)
-                - 'metadata': 元数据信息
+        返回:
+            results: 包含神经活动、BOLD信号等的字典
         """
-        pass
-    
-    def vary_connectivity(self, 
-                         base_connectivity: np.ndarray,
-                         variation_type: str = 'random',
-                         variation_strength: float = 0.2) -> np.ndarray:
-        """
-        生成连接矩阵的变体
+        # 设置连接矩阵
+        self.model.params['C'] = connectivity
         
-        参数：
-            base_connectivity (np.ndarray): 基础连接矩阵
-            variation_type (str): 变化类型
-                - 'random': 随机扰动
-                - 'scale': 缩放
-                - 'sparsify': 稀疏化
-                - 'rewire': 重新连接
-            variation_strength (float): 变化强度
+        # 生成噪声
+        noise = self.stim_generator.generate_noise(sigma=noise_level, color='ou')
+        
+        # 组合输入 (刺激 + 噪声)
+        total_input = noise
+        if stimulus is not None:
+            total_input += stimulus
             
-        返回：
-            np.ndarray: 变化后的连接矩阵
-        """
-        pass
-    
-    def vary_stimulus_parameters(self) -> Dict:
-        """
-        随机生成刺激参数
-        
-        返回：
-            Dict: 刺激参数字典，包含：
-                - stimulus_type: 随机选择的刺激类型
-                - target_regions: 随机选择的目标脑区
-                - amplitude: 随机幅度
-                - duration: 随机持续时间
-                - onset_time: 随机开始时间
-                - frequency: 频率（如果是周期性刺激）
-        """
-        pass
-    
-    def save_dataset(self, dataset: Dict, save_path: str):
-        """
-        保存数据集到磁盘
-        
-        参数：
-            dataset (Dict): 数据集字典
-            save_path (str): 保存路径
-        """
-        pass
-    
-    def load_dataset(self, load_path: str) -> Dict:
-        """
-        从磁盘加载数据集
-        
-        参数：
-            load_path (str): 数据路径
+        # 初始状态
+        if initial_state is None:
+            # 随机初始化
+            # EI模型状态大小为 2 * n_nodes
+            initial_state = np.random.rand(2 * self.n_nodes) * 0.1
             
-        返回：
-            Dict: 数据集字典
-        """
-        pass
+        # 欧拉积分
+        # 注意：为了支持时变输入，我们需要手动积分而不是使用odeint
+        # odeint通常假设参数是常数，或者需要传入函数来插值输入
+        
+        states = np.zeros((self.n_time_steps, 2 * self.n_nodes))
+        states[0] = initial_state
+        
+        current_state = initial_state
+        
+        # 预计算参数以加速
+        # 这里直接调用model.dynamics，虽然稍微慢一点但更通用
+        
+        for i in range(1, self.n_time_steps):
+            t = self.time_points[i-1]
+            u = total_input[i-1]
+            
+            # 计算导数
+            d_state = self.model.dynamics(t, current_state, stimulus=u)
+            
+            # 更新状态 (Euler method)
+            current_state = current_state + d_state * self.dt
+            
+            # 简单的边界限制防止发散 (可选)
+            current_state = np.clip(current_state, 0, 1)
+            
+            states[i] = current_state
+            
+        # 提取兴奋性群体活动作为BOLD模型的输入
+        # 假设前n_nodes是E群体
+        neural_activity_E = states[:, :self.n_nodes]
+        
+        # 下采样神经活动以匹配BOLD模型的时间步长 (如果需要)
+        # 这里假设BOLD模型可以处理相同的时间步长，或者我们在BOLD模型内部处理
+        # BalloonModel通常需要较小的时间步长以保持稳定，这里dt=0.1ms是足够的
+        # 但是BOLD信号本身变化很慢，我们通常只需要每秒保存一个点(TR)
+        # 但为了计算准确，我们先计算全部分辨率的BOLD，然后下采样
+        
+        # 计算BOLD信号
+        # 注意：这步可能很慢，如果时间步长很小。
+        # 实际fMRI TR通常为0.72s或2s。
+        # 我们可以先对神经活动进行降采样，然后再输入Balloon模型，但这会丢失高频信息。
+        # 更好的方法是使用原始分辨率计算BOLD，然后降采样。
+        
+        # 为了演示速度，我们可能需要对神经活动进行降采样，比如每10ms一个点
+        downsample_factor = int(10 / self.dt) # 假设目标是10ms分辨率
+        if downsample_factor < 1: downsample_factor = 1
+        
+        neural_activity_down = neural_activity_E[::downsample_factor]
+        time_points_down = self.time_points[::downsample_factor]
+        
+        # 转换单位：Balloon模型通常期望输入已经归一化或处于某种范围内
+        # 简单的缩放
+        neural_input = neural_activity_down
+        
+        bold_signal = self.balloon_model.compute_bold(neural_input, time_points_down)
+        
+        return {
+            'time_points': time_points_down,
+            'neural_activity': neural_activity_down,
+            'bold_signal': bold_signal,
+            'stimulus': total_input[::downsample_factor] if stimulus is not None else noise[::downsample_factor]
+        }
