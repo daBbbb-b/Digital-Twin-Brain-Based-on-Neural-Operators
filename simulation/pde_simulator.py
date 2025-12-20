@@ -38,7 +38,7 @@ class PDESimulator:
     def __init__(self, 
                  n_nodes: int = 246, 
                  dt: float = 0.1, 
-                 duration: float = 60000.0, 
+                 duration: float = 20000.0, 
                  model_type: str = 'wave',
                  model_params: Optional[Dict] = None):
         
@@ -59,13 +59,31 @@ class PDESimulator:
     def run_simulation(self, 
                        connectivity: Union[np.ndarray, object], 
                        stimulus: Optional[Union[np.ndarray, Callable]] = None,
+                       stimulus_config: Optional[Dict] = None,
                        noise_level: float = 0.01,
-                       initial_state: Optional[np.ndarray] = None) -> Dict:
+                       noise_seed: Optional[int] = None,
+                       initial_state: Optional[np.ndarray] = None,
+                       sampling_interval: float = 50.0) -> Dict:
         """
         运行单次PDE仿真
+        
+        参数:
+            connectivity: 连接矩阵或拉普拉斯矩阵
+            stimulus: 外部刺激
+            stimulus_config: 刺激配置字典 (用于复现)
+            noise_level: 噪声水平
+            noise_seed: 噪声随机种子
+            initial_state: 初始状态
+            sampling_interval: 采样时间间隔 (ms), 默认为50ms
+            
+        返回:
+            results: 包含神经活动、BOLD信号等的字典
         """
         # 设置拉普拉斯矩阵
         self.model.set_laplacian(connectivity)
+        
+        if noise_seed is not None:
+            np.random.seed(noise_seed)
         
         # 内存优化：不预先生成所有噪声
         # noise = self.stim_generator.generate_noise(sigma=noise_level, color='white')
@@ -80,7 +98,7 @@ class PDESimulator:
         # 我们必须在线计算BOLD或者降采样保存。
         
         # 策略：只保存降采样后的神经活动
-        downsample_factor = int(10 / self.dt) # 10ms resolution
+        downsample_factor = int(sampling_interval / self.dt) # sampling_interval resolution
         if downsample_factor < 1: downsample_factor = 1
         
         n_saved_steps = (self.n_time_steps + downsample_factor - 1) // downsample_factor
@@ -94,7 +112,11 @@ class PDESimulator:
              saved_neural_activity[0] = current_state[:self.n_nodes]
              saved_idx += 1
         
+        print(f"Starting PDE simulation: {self.n_time_steps} steps.")
         for i in range(1, self.n_time_steps):
+            if i % 1000 == 0:
+                print(f"Progress: {i}/{self.n_time_steps} ({i/self.n_time_steps*100:.1f}%)", end='\r')
+            
             t = self.time_points[i-1]
             
             # 生成当前步噪声
@@ -118,6 +140,9 @@ class PDESimulator:
             if i % downsample_factor == 0:
                 saved_neural_activity[saved_idx] = current_state[:self.n_nodes]
                 saved_idx += 1
+        
+        print(f"Progress: {self.n_time_steps}/{self.n_time_steps} (100.0%)")
+        print("Simulation finished. Computing BOLD signal...")
             
         # 提取u作为神经活动
         neural_activity = saved_neural_activity
@@ -135,11 +160,26 @@ class PDESimulator:
         # 确保长度匹配
         time_points_down = time_points_down[:len(neural_activity_norm)]
         
-        bold_signal = self.balloon_model.compute_bold(neural_activity_norm, time_points_down)
+        # 注意：BalloonModel期望时间单位为秒(s)，而仿真器使用毫秒(ms)
+        # 因此需要将时间点转换为秒
+        time_points_sec = time_points_down / 1000.0
+        
+        bold_signal = self.balloon_model.compute_bold(neural_activity_norm, time_points_sec)
         
         return {
             'time_points': time_points_down,
             'neural_activity': neural_activity_norm, # 已经是降采样的
             'bold_signal': bold_signal,
-            # 'stimulus': ... # 刺激太大，不保存完整历史
+            'stimulus_config': {
+                'task_stimulus': stimulus_config,
+                'noise_config': {
+                    'type': 'white_noise',
+                    'params': {'sigma': noise_level, 'seed': noise_seed}
+                }
+            },
+            'metadata': {
+                'model_type': 'Wave_PDE',
+                'dt': self.dt,
+                'sampling_interval': sampling_interval
+            }
         }

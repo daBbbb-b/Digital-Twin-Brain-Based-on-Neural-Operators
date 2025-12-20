@@ -53,6 +53,7 @@ def load_connectivity(file_path):
 def generate_dummy_ec(n_nodes):
     """生成虚拟有效连接矩阵 (EC)"""
     # 随机生成一个稀疏矩阵作为EC
+    print("生成虚拟EC矩阵...")
     ec = np.random.randn(n_nodes, n_nodes) * 0.1
     # 稀疏化
     mask = np.random.rand(n_nodes, n_nodes) > 0.8
@@ -65,8 +66,8 @@ def main():
     
     # --- 配置区域 ---
     # 设置为 True 以启用对应的仿真生成，设置为 False 以跳过
-    ENABLE_ODE_EC = False   # 基于有效连接(EC)的ODE仿真
-    ENABLE_ODE_SC = False   # 基于结构连接(SC)的ODE仿真
+    ENABLE_ODE_EC = True   # 基于有效连接(EC)的ODE仿真
+    ENABLE_ODE_SC = True   # 基于结构连接(SC)的ODE仿真
     ENABLE_PDE_SURF = True # 基于皮层表面的PDE仿真
     # ----------------
 
@@ -88,14 +89,15 @@ def main():
     n_nodes = sc_matrix.shape[0]
     logger.info(f"加载SC矩阵，大小: {sc_matrix.shape}")
     
-    # 2. 生成EC矩阵 (模拟)
+    # 2. 生成EC矩阵 (模拟刘泉影的方法)
     ec_matrix = generate_dummy_ec(n_nodes)
     logger.info("生成虚拟EC矩阵")
     
     # 3. 仿真参数
-    dt = 0.5 # ms (稍微大一点以加快速度)
-    duration = 20000.0 # 20s
-    n_samples = 5 # 生成样本数
+    dt = 0.1 # ms (神经动力学仿真步长)
+    duration = 60000.0 # 60s
+    sampling_interval = 50.0 # 50ms (采样间隔)
+    n_samples = 5 # 演示用样本数，实际任务建议 1000
     
     # 初始化 ODE 仿真器和刺激生成器 (如果需要)
     ode_sim = None
@@ -107,6 +109,7 @@ def main():
     # 4. ODE仿真 (基于EC)
     if ENABLE_ODE_EC:
         logger.info("开始ODE仿真 (基于EC)...")
+        ode_sim = ODESimulator(n_nodes=n_nodes, dt=dt, duration=duration, model_type='EI')
         
         for i in range(n_samples):
             # 随机生成刺激
@@ -114,10 +117,17 @@ def main():
             stim_dur = np.random.uniform(1000, 5000)
             target_nodes = np.random.choice(n_nodes, size=10, replace=False).tolist()
             
-            stimulus = stim_gen.generate_boxcar(onset, stim_dur, amplitude=0.5, nodes=target_nodes)
+            stimulus, stim_config = stim_gen.generate_boxcar(onset, stim_dur, amplitude=0.5, nodes=target_nodes)
             
             # 运行仿真
-            results = ode_sim.run_simulation(connectivity=ec_matrix, stimulus=stimulus, noise_level=0.02)
+            results = ode_sim.run_simulation(
+                connectivity=ec_matrix, 
+                stimulus=stimulus, 
+                stimulus_config=stim_config,
+                noise_level=0.02, 
+                noise_seed=i,
+                sampling_interval=sampling_interval
+            )
             
             # 保存结果
             save_path = output_dir / f'ode_ec_sample_{i}.pkl'
@@ -130,14 +140,22 @@ def main():
     # 5. ODE仿真 (基于SC - 白质)
     if ENABLE_ODE_SC:
         logger.info("开始ODE仿真 (基于SC)...")
+        ode_sim = ODESimulator(n_nodes=n_nodes, dt=dt, duration=duration, model_type='EI')
         for i in range(n_samples):
             onset = np.random.uniform(2000, 15000)
             stim_dur = np.random.uniform(1000, 5000)
             target_nodes = np.random.choice(n_nodes, size=10, replace=False).tolist()
             
-            stimulus = stim_gen.generate_boxcar(onset, stim_dur, amplitude=0.5, nodes=target_nodes)
+            stimulus, stim_config = stim_gen.generate_boxcar(onset, stim_dur, amplitude=0.5, nodes=target_nodes)
             
-            results = ode_sim.run_simulation(connectivity=sc_matrix, stimulus=stimulus, noise_level=0.02)
+            results = ode_sim.run_simulation(
+                connectivity=sc_matrix, 
+                stimulus=stimulus, 
+                stimulus_config=stim_config,
+                noise_level=0.02,
+                noise_seed=i,
+                sampling_interval=sampling_interval
+            )
             
             save_path = output_dir / f'ode_sc_sample_{i}.pkl'
             with open(save_path, 'wb') as f:
@@ -163,22 +181,24 @@ def main():
                 surf_adj = surface_utils.get_mesh_adjacency(faces, n_vertices)
                 
                 pde_sim = PDESimulator(n_nodes=n_vertices, dt=dt, duration=duration, model_type='wave')
+                stim_gen_pde = StimulationGenerator(n_nodes=n_vertices, dt=dt, duration=duration)
                 
                 for i in range(n_samples):
                     # 随机刺激参数
                     onset = np.random.uniform(2000, 15000)
                     stim_dur = np.random.uniform(1000, 5000)
                     target_nodes = np.random.choice(n_vertices, size=5, replace=False).tolist()
-                    amplitude = 1.0
                     
-                    # 定义刺激函数 (闭包)
-                    def stimulus_func(t):
-                        val = np.zeros(n_vertices)
-                        if onset <= t < onset + stim_dur:
-                            val[target_nodes] = amplitude
-                        return val
+                    stimulus, stim_config = stim_gen_pde.generate_boxcar(onset, stim_dur, amplitude=1.0, nodes=target_nodes)
                     
-                    results = pde_sim.run_simulation(connectivity=surf_adj, stimulus=stimulus_func, noise_level=0.01)
+                    results = pde_sim.run_simulation(
+                        connectivity=surf_adj, 
+                        stimulus=stimulus, 
+                        stimulus_config=stim_config,
+                        noise_level=0.01, 
+                        noise_seed=i,
+                        sampling_interval=sampling_interval
+                    )
                     
                     save_path = output_dir / f'pde_surf_sample_{i}.pkl'
                     with open(save_path, 'wb') as f:
