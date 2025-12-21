@@ -66,9 +66,9 @@ def main():
     
     # --- 配置区域 ---
     # 设置为 True 以启用对应的仿真生成，设置为 False 以跳过
-    ENABLE_ODE_EC = True   # 基于有效连接(EC)的ODE仿真
+    ENABLE_ODE_EC = False   # 基于有效连接(EC)的ODE仿真
     ENABLE_ODE_SC = True   # 基于结构连接(SC)的ODE仿真
-    ENABLE_PDE_SURF = True # 基于皮层表面的PDE仿真
+    ENABLE_PDE_SURF = False # 基于皮层表面的PDE仿真
     # ----------------
 
     # 路径设置
@@ -93,71 +93,68 @@ def main():
     ec_matrix = generate_dummy_ec(n_nodes)
     logger.info("生成虚拟EC矩阵")
     
-    # 3. 仿真参数
-    dt = 0.1 # ms (神经动力学仿真步长)
-    duration = 60000.0 # 60s
-    sampling_interval = 50.0 # 50ms (采样间隔)
-    n_samples = 5 # 演示用样本数，实际任务建议 1000
+    # 3. 仿真参数 (根据 Prompt 要求调整)
+    dt = 0.05 # s (时间步长 0.05-0.2s)
+    duration = 200.0 # s (Run时长 200s)
+    sampling_interval = 0.05 # s (采样间隔)
+    n_samples = 500 # 演示用样本数
+    
+    # 记录关键超参数
+    logger.info("=== 仿真超参数配置 ===")
+    logger.info(f"时间步长 (dt): {dt} s")
+    logger.info(f"仿真时长 (duration): {duration} s")
+    logger.info(f"采样间隔 (sampling_interval): {sampling_interval} s")
+    logger.info(f"样本数量 (n_samples): {n_samples}")
+    logger.info(f"ODE(EC) 启用: {ENABLE_ODE_EC}")
+    logger.info(f"ODE(SC) 启用: {ENABLE_ODE_SC}")
+    logger.info(f"PDE(Surf) 启用: {ENABLE_PDE_SURF}")
+    logger.info("========================")
     
     # 初始化 ODE 仿真器和刺激生成器 (如果需要)
     ode_sim = None
     stim_gen = None
-    if ENABLE_ODE_EC or ENABLE_ODE_SC:
-        ode_sim = ODESimulator(n_nodes=n_nodes, dt=dt, duration=duration, model_type='EI')
-        stim_gen = StimulationGenerator(n_nodes, dt, duration)
-
-    # 4. ODE仿真 (基于EC)
+    
+    # 4. ODE仿真 (基于EC - EI Model)
     if ENABLE_ODE_EC:
-        logger.info("开始ODE仿真 (基于EC)...")
+        logger.info("开始ODE仿真 (基于EC, EI Model)...")
+        # 使用 EIModel
         ode_sim = ODESimulator(n_nodes=n_nodes, dt=dt, duration=duration, model_type='EI')
         
         for i in range(n_samples):
-            # 随机生成刺激
-            onset = np.random.uniform(2000, 15000)
-            stim_dur = np.random.uniform(1000, 5000)
-            target_nodes = np.random.choice(n_nodes, size=10, replace=False).tolist()
-            
-            stimulus, stim_config = stim_gen.generate_boxcar(onset, stim_dur, amplitude=0.5, nodes=target_nodes)
-            
-            # 运行仿真
+            # 自动生成 Task 和 刺激
+            # run_simulation 会自动调用 generate_task_schedule 如果 stimulus 为 None
             results = ode_sim.run_simulation(
                 connectivity=ec_matrix, 
-                stimulus=stimulus, 
-                stimulus_config=stim_config,
+                stimulus=None, # 让仿真器自动生成
                 noise_level=0.02, 
                 noise_seed=i,
-                sampling_interval=sampling_interval
+                sampling_interval=sampling_interval,
+                n_stim_channels=n_nodes # EI模型刺激作用于所有节点
             )
             
             # 保存结果
-            save_path = output_dir / f'ode_ec_sample_{i}.pkl'
+            save_path = output_dir / f'ode_ec_ei_sample_{i}.pkl'
             with open(save_path, 'wb') as f:
                 pickle.dump(results, f)
             logger.info(f"保存ODE样本 {i} 到 {save_path}")
     else:
         logger.info("跳过 ODE仿真 (基于EC)")
         
-    # 5. ODE仿真 (基于SC - 白质)
+    # 5. ODE仿真 (基于SC - EI Model)
     if ENABLE_ODE_SC:
-        logger.info("开始ODE仿真 (基于SC)...")
+        logger.info("开始ODE仿真 (基于SC, EI Model)...")
         ode_sim = ODESimulator(n_nodes=n_nodes, dt=dt, duration=duration, model_type='EI')
         for i in range(n_samples):
-            onset = np.random.uniform(2000, 15000)
-            stim_dur = np.random.uniform(1000, 5000)
-            target_nodes = np.random.choice(n_nodes, size=10, replace=False).tolist()
-            
-            stimulus, stim_config = stim_gen.generate_boxcar(onset, stim_dur, amplitude=0.5, nodes=target_nodes)
-            
             results = ode_sim.run_simulation(
                 connectivity=sc_matrix, 
-                stimulus=stimulus, 
-                stimulus_config=stim_config,
+                stimulus=None,
                 noise_level=0.02,
-                noise_seed=i,
-                sampling_interval=sampling_interval
+                noise_seed=i+1000,
+                sampling_interval=sampling_interval,
+                n_stim_channels=n_nodes
             )
             
-            save_path = output_dir / f'ode_sc_sample_{i}.pkl'
+            save_path = output_dir / f'ode_sc_ei_sample_{i}.pkl'
             with open(save_path, 'wb') as f:
                 pickle.dump(results, f)
             logger.info(f"保存ODE(SC)样本 {i} 到 {save_path}")
@@ -181,20 +178,14 @@ def main():
                 surf_adj = surface_utils.get_mesh_adjacency(faces, n_vertices)
                 
                 pde_sim = PDESimulator(n_nodes=n_vertices, dt=dt, duration=duration, model_type='wave')
-                stim_gen_pde = StimulationGenerator(n_nodes=n_vertices, dt=dt, duration=duration)
                 
                 for i in range(n_samples):
-                    # 随机刺激参数
-                    onset = np.random.uniform(2000, 15000)
-                    stim_dur = np.random.uniform(1000, 5000)
-                    target_nodes = np.random.choice(n_vertices, size=5, replace=False).tolist()
-                    
-                    stimulus, stim_config = stim_gen_pde.generate_boxcar(onset, stim_dur, amplitude=1.0, nodes=target_nodes)
-                    
+                    # 传入 vertices 以生成空间刺激
                     results = pde_sim.run_simulation(
                         connectivity=surf_adj, 
-                        stimulus=stimulus, 
-                        stimulus_config=stim_config,
+                        vertices=vertices,
+                        faces=faces,
+                        stimulus=None, # 自动生成
                         noise_level=0.01, 
                         noise_seed=i,
                         sampling_interval=sampling_interval
@@ -207,12 +198,15 @@ def main():
                     
             except Exception as e:
                 logger.error(f"Surface PDE仿真失败: {e}")
+                import traceback
+                traceback.print_exc()
         else:
             logger.warning("无法加载Surface文件或nibabel未安装，跳过Surface PDE仿真。")
     else:
         logger.info("跳过 PDE仿真 (基于皮层Surface)")
         
     logger.info("仿真数据生成完成。")
+
 
 if __name__ == "__main__":
     main()

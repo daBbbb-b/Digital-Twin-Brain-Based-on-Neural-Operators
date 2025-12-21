@@ -10,7 +10,6 @@
 
 from .ode_models import ODEModel, EIModel
 from .pde_models import PDEModel, WaveEquationModel
-from .stochastic_models import StochasticODE, StochasticPDE
 from .balloon_model import BalloonModel
 
 __all__ = ['ODEModel', 'EIModel', 'PDEModel', 'WaveEquationModel', 

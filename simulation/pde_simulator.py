@@ -58,6 +58,8 @@ class PDESimulator:
         
     def run_simulation(self, 
                        connectivity: Union[np.ndarray, object], 
+                       vertices: Optional[np.ndarray] = None,
+                       faces: Optional[np.ndarray] = None,
                        stimulus: Optional[Union[np.ndarray, Callable]] = None,
                        stimulus_config: Optional[Dict] = None,
                        noise_level: float = 0.01,
@@ -69,6 +71,8 @@ class PDESimulator:
         
         参数:
             connectivity: 连接矩阵或拉普拉斯矩阵
+            vertices: (N, 3) 顶点坐标 (用于生成空间刺激)
+            faces: (M, 3) 面索引 (可选，用于测地距离)
             stimulus: 外部刺激
             stimulus_config: 刺激配置字典 (用于复现)
             noise_level: 噪声水平
@@ -84,102 +88,78 @@ class PDESimulator:
         
         if noise_seed is not None:
             np.random.seed(noise_seed)
+            
+        # 自动生成刺激 (如果未提供且提供了顶点信息)
+        if stimulus is None and vertices is not None:
+            # 使用 TaskSchedule 生成刺激
+            # 假设 PDE 刺激与 ODE 任务结构类似，或者独立生成
+            # 这里我们独立生成 PDE 任务序列
+            tasks = self.stim_generator.generate_task_schedule(n_channels=0, n_vertices_pde=self.n_nodes)
+            stimulus, stimulus_config = self.stim_generator.generate_pde_stimulus(tasks, vertices, faces)
         
-        # 内存优化：不预先生成所有噪声
-        # noise = self.stim_generator.generate_noise(sigma=noise_level, color='white')
+        # 预生成噪声 (内存允许的情况下)
+        # PDE 噪声: 空间-时间白噪声
+        # noise = np.random.normal(0, 1, (self.n_time_steps, self.n_nodes)) * noise_level
         
         if initial_state is None:
             # Wave equation state: [u, v]
             initial_state = np.zeros(2 * self.n_nodes)
             
-        # 内存优化：如果节点数太多，不保存所有状态？
-        # 但我们需要计算BOLD，需要历史。
-        # 如果N很大(32k)，T=40k，states大小为 40000 * 64000 * 8 bytes = 20GB!
-        # 我们必须在线计算BOLD或者降采样保存。
+        # 运行积分
+        state = initial_state
+        states = [] # 只保存 u (神经活动)
         
-        # 策略：只保存降采样后的神经活动
-        downsample_factor = int(sampling_interval / self.dt) # sampling_interval resolution
-        if downsample_factor < 1: downsample_factor = 1
+        sampling_steps = int(sampling_interval / self.dt)
         
-        n_saved_steps = (self.n_time_steps + downsample_factor - 1) // downsample_factor
-        saved_neural_activity = np.zeros((n_saved_steps, self.n_nodes), dtype=np.float32)
-        
-        current_state = initial_state
-        saved_idx = 0
-        
-        # 保存初始状态
-        if 0 % downsample_factor == 0:
-             saved_neural_activity[0] = current_state[:self.n_nodes]
-             saved_idx += 1
-        
-        print(f"Starting PDE simulation: {self.n_time_steps} steps.")
-        for i in range(1, self.n_time_steps):
-            if i % 1000 == 0:
-                print(f"Progress: {i}/{self.n_time_steps} ({i/self.n_time_steps*100:.1f}%)", end='\r')
+        for i in range(self.n_time_steps):
+            t = self.time_points[i]
             
-            t = self.time_points[i-1]
-            
-            # 生成当前步噪声
-            noise_t = np.random.normal(0, noise_level, self.n_nodes)
-            
-            # 获取当前步刺激
-            u = noise_t
+            # 获取当前时刻刺激
+            u_t = None
             if stimulus is not None:
                 if callable(stimulus):
-                    u += stimulus(t)
-                elif isinstance(stimulus, np.ndarray):
-                    u += stimulus[i-1]
+                    u_t = stimulus(t)
+                else:
+                    u_t = stimulus[i]
             
-            d_state = self.model.dynamics(t, current_state, stimulus=u)
-            current_state = current_state + d_state * self.dt
+            # 生成当前步噪声
+            noise_t = np.random.normal(0, 1, self.n_nodes) * noise_level
             
-            # 简单的数值稳定性限制
-            current_state = np.clip(current_state, -10, 10)
+            # 组合输入
+            total_input = noise_t
+            if u_t is not None:
+                total_input += u_t
+                
+            # 计算导数
+            dydt = self.model.dynamics(t, state, total_input)
             
-            # 降采样保存
-            if i % downsample_factor == 0:
-                saved_neural_activity[saved_idx] = current_state[:self.n_nodes]
-                saved_idx += 1
-        
-        print(f"Progress: {self.n_time_steps}/{self.n_time_steps} (100.0%)")
-        print("Simulation finished. Computing BOLD signal...")
+            # Euler step
+            state = state + dydt * self.dt
             
-        # 提取u作为神经活动
-        neural_activity = saved_neural_activity
+            # 简单的边界限制 (可选)
+            # state = np.clip(state, -10, 10)
+            
+            if i % sampling_steps == 0:
+                # 只保存 u (前 n_nodes 个状态)
+                states.append(state[:self.n_nodes].copy())
+                
+        states = np.array(states)
         
-        # 归一化到0-1之间以便输入Balloon模型 (假设u代表膜电位偏差)
-        # sigmoid已经在模型里了，但这里我们取出来的值可能需要调整
-        neural_activity_norm = 1.0 / (1.0 + np.exp(-neural_activity))
-        
-        # Balloon模型计算
-        # 注意：Balloon模型内部也会消耗内存，如果N很大。
-        # BalloonModel.compute_bold 需要 (T_down, N)
-        # T_down ~ 2000, N ~ 32000 -> 64M floats -> 256MB. 这是可以接受的。
-        
-        time_points_down = self.time_points[::downsample_factor]
-        # 确保长度匹配
-        time_points_down = time_points_down[:len(neural_activity_norm)]
-        
-        # 注意：BalloonModel期望时间单位为秒(s)，而仿真器使用毫秒(ms)
-        # 因此需要将时间点转换为秒
-        time_points_sec = time_points_down / 1000.0
-        
-        bold_signal = self.balloon_model.compute_bold(neural_activity_norm, time_points_sec)
+        # 计算 BOLD 信号
+        bold = self.balloon_model.compute_bold(states, self.dt * sampling_steps)
         
         return {
-            'time_points': time_points_down,
-            'neural_activity': neural_activity_norm, # 已经是降采样的
-            'bold_signal': bold_signal,
-            'stimulus_config': {
-                'task_stimulus': stimulus_config,
-                'noise_config': {
-                    'type': 'white_noise',
-                    'params': {'sigma': noise_level, 'seed': noise_seed}
-                }
-            },
+            'time_points': self.time_points[::sampling_steps],
+            'neural_activity': states,
+            'bold_signal': bold,
+            'stimulus_config': stimulus_config,
             'metadata': {
                 'model_type': 'Wave_PDE',
                 'dt': self.dt,
-                'sampling_interval': sampling_interval
+                'sampling_interval': sampling_interval,
+                'noise_level': noise_level
             }
         }
+
+
+

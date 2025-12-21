@@ -98,6 +98,9 @@ class EIModel(ODEModel):
         """
         计算微分方程的导数
         
+        dE/dt = (-E + S_E(w_EE*E - w_EI*I + G*C*E + u)) / tau_E
+        dI/dt = (-I + S_I(w_IE*E - w_II*I + u)) / tau_I
+        
         state: 形状为 (2 * n_nodes,)
         stimulus: 形状为 (n_nodes,)，仅作用于E群体（通常假设）
         """
@@ -125,10 +128,75 @@ class EIModel(ODEModel):
         input_E = w_EE * E - w_EI * I + G * (C @ E) + u
         
         # I群体的输入: 局部兴奋 - 自抑制
-        input_I = w_IE * E - w_II * I
+        input_I = w_IE * E - w_II * I + u
         
         # 计算导数
         dE_dt = (-E + self.sigmoid_E(input_E)) / tau_E
         dI_dt = (-I + self.sigmoid_I(input_I)) / tau_I
         
         return np.concatenate([dE_dt, dI_dt])
+
+
+class BilinearControlModel(ODEModel):
+    """
+    双线性控制模型 (用于神经算子反演任务)
+    
+    方程:
+    dx(t)/dt = A x(t) + sum_{k=1}^K u_k(t) B^{(k)} x(t) + C u(t) + eta(t)
+    
+    其中:
+    - x(t): 状态变量 (N,)
+    - u(t): 控制输入 (K,)
+    - A: 系统矩阵 (N, N) (连接矩阵)
+    - B: 调制张量 (K, N, N)
+    - C: 驱动矩阵 (N, K)
+    """
+    
+    def __init__(self, n_nodes: int, params: Optional[Dict] = None):
+        super().__init__(n_nodes, params)
+        
+        self.default_params = {
+            'A': None,       # (N, N)
+            'B': None,       # (K, N, N) or list of (N, N)
+            'C': None,       # (N, K)
+        }
+        if params:
+            self.default_params.update(params)
+        self.params = self.default_params
+        
+        # 检查参数
+        if self.params['A'] is None:
+            self.params['A'] = np.zeros((n_nodes, n_nodes))
+            
+    def dynamics(self, t: float, state: np.ndarray, stimulus: Optional[np.ndarray] = None) -> np.ndarray:
+        """
+        计算导数 dx/dt
+        """
+        x = state
+        A = self.params['A']
+        B = self.params['B'] # List of matrices or 3D array
+        C = self.params['C']
+        
+        # 线性部分 Ax
+        dxdt = A @ x
+        
+        if stimulus is not None:
+            # stimulus u(t) is (K,)
+            u = stimulus
+            
+            # 双线性部分 sum u_k B^{(k)} x
+            if B is not None:
+                # 假设 B 是 (K, N, N)
+                # sum_k u_k (B[k] @ x)
+                bilinear_term = np.zeros_like(x)
+                for k in range(len(u)):
+                    if u[k] != 0:
+                        bilinear_term += u[k] * (B[k] @ x)
+                dxdt += bilinear_term
+            
+            # 驱动部分 Cu
+            if C is not None:
+                dxdt += C @ u
+                
+        return dxdt
+

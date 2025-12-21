@@ -3,6 +3,7 @@
 
 功能说明：
     生成多样化的刺激函数，用于ODE和PDE仿真。
+    支持基于Task的复杂刺激生成，满足神经算子反演需求。
 
 主要类：
     StimulationGenerator: 刺激函数生成器
@@ -14,16 +15,27 @@
 
 输出：
     - 刺激函数（时间或时空函数）
-
-说明：
-    支持多尺度刺激：
-    - 神经递质层面：模拟神经调质的缓慢变化
-    - 平均发放率层面：模拟神经元群体的快速活动
 """
 
 import numpy as np
 from typing import Callable, Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass, field
+import scipy.sparse as sparse
 
+@dataclass
+class TaskEvent:
+    """定义一个Task事件"""
+    index: int
+    start_time: float
+    end_time: float
+    duration: float
+    # ODE 参数
+    active_channels: List[int] = field(default_factory=list)
+    amplitudes_ode: List[float] = field(default_factory=list)
+    # PDE 参数
+    seed_vertices: List[int] = field(default_factory=list)
+    amplitude_pde: float = 0.0
+    sigma_s: float = 10.0
 
 class StimulationGenerator:
     """
@@ -37,11 +49,211 @@ class StimulationGenerator:
         self.time_points = np.arange(0, duration, dt)
         self.n_time_steps = len(self.time_points)
         
+    def _smooth_boxcar(self, t: np.ndarray, t0: float, t1: float, rise_time: float = 500.0) -> np.ndarray:
+        """
+        生成平滑的Boxcar函数 (Sigmoid边界)
+        
+        s(t) = sigmoid((t - t0)/tau) * (1 - sigmoid((t - t1)/tau))
+        """
+        # tau 使得 rise_time 对应约 10% 到 90%
+        # sigmoid(x) = 1 / (1 + exp(-x))
+        # x goes from -3 to 3 covers most transition
+        tau = rise_time / 6.0
+        
+        s1 = 1.0 / (1.0 + np.exp(-(t - t0) / tau))
+        s2 = 1.0 / (1.0 + np.exp(-(t - t1) / tau))
+        
+        return s1 * (1.0 - s2)
+
+    def generate_task_schedule(self, 
+                             n_channels: int, 
+                             n_vertices_pde: Optional[int] = None) -> List[TaskEvent]:
+        """
+        生成 Run 的 Task 调度序列
+        
+        参数:
+            n_channels: ODE刺激通道数 K
+            n_vertices_pde: PDE顶点数 (用于随机选择seed)
+            
+        返回:
+            task_list: TaskEvent 列表
+        """
+        tasks = []
+        current_time = 0.0
+        task_idx = 0
+        
+        # 预留开始的一段静息时间
+        current_time += np.random.uniform(1000, 3000)
+        
+        while current_time < self.duration - 5000: # 留出结尾余量
+            # Task duration: 5s -15s
+            dur = np.random.uniform(5000, 15000)
+            if current_time + dur > self.duration:
+                dur = self.duration - current_time - 1000
+                if dur < 5000: break
+            
+            t_start = current_time
+            t_end = current_time + dur
+            
+            # ODE Params
+            # 随机选择 1-3 个通道
+            # 小巧思：ei的n_channels为节点数，可以刺激所有节点,实际上只会选择最多4个节点
+            n_active = np.random.randint(1, min(4, n_channels + 1))
+            active_chs = np.random.choice(n_channels, size=n_active, replace=False).tolist()
+            
+            # 幅度采样: [-2.0, -0.5] U [0.5, 2.0]
+            amps_ode = []
+            for _ in range(n_active):
+                if np.random.rand() > 0.5:
+                    amp = np.random.uniform(0.5, 2.0)
+                else:
+                    amp = np.random.uniform(-2.0, -0.5)
+                amps_ode.append(amp)
+                
+            # PDE Params
+            seeds = []
+            amp_pde = 0.0
+            sigma_s = 10.0
+            if n_vertices_pde is not None:
+                n_seeds = np.random.randint(1, 4)
+                seeds = np.random.choice(n_vertices_pde, size=n_seeds, replace=False).tolist()
+                if np.random.rand() > 0.5:
+                    amp_pde = np.random.uniform(0.5, 2.0)
+                else:
+                    amp_pde = np.random.uniform(-2.0, -0.5)
+                sigma_s = np.random.uniform(5.0, 15.0)
+            
+            task = TaskEvent(
+                index=task_idx,
+                start_time=t_start,
+                end_time=t_end,
+                duration=dur,
+                active_channels=active_chs,
+                amplitudes_ode=amps_ode,
+                seed_vertices=seeds,
+                amplitude_pde=amp_pde,
+                sigma_s=sigma_s
+            )
+            tasks.append(task)
+            
+            current_time = t_end
+            task_idx += 1
+            
+        return tasks
+
+    def generate_ode_stimulus(self, 
+                            tasks: List[TaskEvent], 
+                            n_channels: int) -> Tuple[np.ndarray, Dict]:
+        """
+        生成 ODE 刺激 u(t) (K维)
+        
+        返回:
+            u: (n_time_steps, n_channels)
+            config: 配置信息
+        """
+        u = np.zeros((self.n_time_steps, n_channels))
+        
+        for task in tasks:
+            # 时间包络
+            envelope = self._smooth_boxcar(self.time_points, task.start_time, task.end_time)
+            
+            for ch_idx, amp in zip(task.active_channels, task.amplitudes_ode):
+                u[:, ch_idx] += amp * envelope
+                
+        # 添加弱慢噪声 (可选)
+        # 这里不添加，保持确定性部分，噪声在外部添加或作为独立项
+        
+        config = {
+            'type': 'task_based_ode',
+            'n_channels': n_channels,
+            'tasks': [
+                {
+                    'index': t.index,
+                    'range': (t.start_time, t.end_time),
+                    'channels': t.active_channels,
+                    'amplitudes': t.amplitudes_ode
+                }
+                for t in tasks
+            ]
+        }
+        return u, config
+
+    def generate_pde_stimulus(self, 
+                            tasks: List[TaskEvent], 
+                            vertices: np.ndarray,
+                            faces: Optional[np.ndarray] = None) -> Tuple[np.ndarray, Dict]:
+        """
+        生成 PDE 刺激 u_pde(s, t)
+        
+        参数:
+            vertices: (N, 3) 顶点坐标
+            faces: (M, 3) 面索引 (用于计算测地距离，如果未提供则使用欧氏距离)
+            
+        返回:
+            u_pde: (n_time_steps, n_vertices)
+            config: 配置信息
+        """
+        n_verts = vertices.shape[0]
+        u_pde = np.zeros((self.n_time_steps, n_verts))
+        
+        # 预计算距离可能太慢，按需计算
+        # 使用欧氏距离近似测地距离 (对于局部 patch 误差可接受)
+        # 或者如果提供了 faces，可以使用简单的图搜索 (Dijkstra)
+        
+        for task in tasks:
+            if not task.seed_vertices:
+                continue
+                
+            # 时间包络
+            envelope = self._smooth_boxcar(self.time_points, task.start_time, task.end_time)
+            
+            # 空间分布 phi(s)
+            spatial_map = np.zeros(n_verts)
+            
+            for seed in task.seed_vertices:
+                seed_pos = vertices[seed]
+                # 计算所有点到 seed 的距离 (欧氏距离近似)
+                # dists = || v - seed ||
+                dists = np.linalg.norm(vertices - seed_pos, axis=1)
+                
+                # Gaussian patch
+                # phi(s) = exp(-d^2 / (2 * sigma^2))
+                patch = np.exp(-dists**2 / (2 * task.sigma_s**2))
+                
+                # 截断过小的值以保持稀疏性/局部性 (可选)
+                patch[patch < 0.01] = 0
+                
+                spatial_map += patch
+            
+            # 归一化或限制叠加后的最大值? 
+            # 题目未要求，但通常保持幅度一致
+            # 这里直接叠加，幅度由 amplitude_pde 控制
+            
+            # u(s, t) += amp * phi(s) * s(t)
+            # 外积: (T, 1) * (1, N) -> (T, N)
+            u_pde += task.amplitude_pde * np.outer(envelope, spatial_map)
+            
+        config = {
+            'type': 'task_based_pde',
+            'tasks': [
+                {
+                    'index': t.index,
+                    'range': (t.start_time, t.end_time),
+                    'seeds': t.seed_vertices,
+                    'amplitude': t.amplitude_pde,
+                    'sigma_s': t.sigma_s
+                }
+                for t in tasks
+            ]
+        }
+        return u_pde, config
+
     def generate_boxcar(self, 
                         onset: float, 
                         duration: float, 
                         amplitude: float = 1.0, 
                         nodes: Optional[List[int]] = None) -> Tuple[np.ndarray, Dict]:
+
         """
         生成Boxcar（矩形波）刺激
         
