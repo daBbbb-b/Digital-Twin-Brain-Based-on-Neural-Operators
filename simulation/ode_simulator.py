@@ -37,8 +37,8 @@ class ODESimulator:
     
     def __init__(self, 
                  n_nodes: int = 246, 
-                 dt: float = 0.1, 
-                 duration: float = 20000.0, # 20 seconds
+                 dt: float = 0.01, 
+                 duration: float = 20.0, # 20 seconds
                  model_type: str = 'EI',
                  model_params: Optional[Dict] = None):
         
@@ -97,7 +97,7 @@ class ODESimulator:
                        noise_level: float = 0.01,
                        noise_seed: Optional[int] = None,
                        initial_state: Optional[np.ndarray] = None,
-                       sampling_interval: float = 50.0,
+                       sampling_interval: float = 0.05,
                        n_stim_channels: int = 5) -> Dict:
         """
         运行单次仿真
@@ -109,7 +109,7 @@ class ODESimulator:
             noise_level: 噪声水平
             noise_seed: 噪声随机种子
             initial_state: 初始状态
-            sampling_interval: 采样时间间隔 (ms)
+            sampling_interval: 采样时间间隔 (s)
             n_stim_channels: 刺激通道数 (仅用于 bilinear 模型且未提供 stimulus 时)
             
         返回:
@@ -144,7 +144,13 @@ class ODESimulator:
                 # 这里简单起见，我们随机选择一些节点进行刺激
                 tasks = self.stim_generator.generate_task_schedule(n_channels=self.n_nodes)
                 # 注意：generate_ode_stimulus 返回的是 (T, K)，如果 K=N，则直接是 (T, N)
+                print(len(tasks))
                 stimulus, stimulus_config = self.stim_generator.generate_ode_stimulus(tasks, self.n_nodes)
+                print(stimulus.shape)
+                #打印前几个config里面task的信息
+                for key in list(stimulus_config.keys()):
+                    print(f"Stimulus config for channel {key}: {stimulus_config[key]}")
+
             else:
                 # 默认 EI 刺激生成 (保持兼容性)
                 # 这里可以保留旧逻辑或抛出警告

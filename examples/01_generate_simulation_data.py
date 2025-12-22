@@ -105,7 +105,7 @@ def main():
     # 记录关键超参数
     logger.info("=== 仿真超参数配置 ===")
     logger.info(f"时间步长 (dt): {dt} s")
-    logger.info(f"仿真时长 (duration): {duration} s")
+    logger.info(f"仿真时长 (duration): {duration} ms")
     logger.info(f"采样间隔 (sampling_interval): {sampling_interval} s")
     logger.info(f"样本数量 (n_samples): {n_samples}")
     logger.info(f"ODE(EC) 启用: {ENABLE_ODE_EC}")

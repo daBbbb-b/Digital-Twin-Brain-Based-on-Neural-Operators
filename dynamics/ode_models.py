@@ -56,8 +56,8 @@ class EIModel(ODEModel):
         
         # 默认参数 (参考 Deco et al. 或 Pang et al.)
         self.default_params = {
-            'tau_E': 10.0,   # 兴奋性时间常数 (ms)
-            'tau_I': 20.0,   # 抑制性时间常数 (ms)
+            'tau_E': 0.01,   # 兴奋性时间常数 (s)
+            'tau_I': 0.02,   # 抑制性时间常数 (s)
             'w_EE': 1.5,     # E -> E 自连接权重
             'w_EI': 1.0,     # I -> E 连接权重
             'w_IE': 1.0,     # E -> I 连接权重
@@ -68,7 +68,7 @@ class EIModel(ODEModel):
             'b_E': 125,      # 增益函数参数
             'd_E': 0.16,     # 增益函数参数
             'a_I': 615,      # 增益函数参数
-            'b_I': 177,      # 增益函数参数
+            'b_I': 177,      # 增益函   数参数
             'd_I': 0.087,    # 增益函数参数
         }
         

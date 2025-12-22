@@ -26,9 +26,9 @@ import scipy.sparse as sparse
 class TaskEvent:
     """定义一个Task事件"""
     index: int
-    start_time: float
-    end_time: float
-    duration: float
+    start_time: float  #s
+    end_time: float  #s
+    duration: float  #s
     # ODE 参数
     active_channels: List[int] = field(default_factory=list)
     amplitudes_ode: List[float] = field(default_factory=list)
@@ -49,7 +49,7 @@ class StimulationGenerator:
         self.time_points = np.arange(0, duration, dt)
         self.n_time_steps = len(self.time_points)
         
-    def _smooth_boxcar(self, t: np.ndarray, t0: float, t1: float, rise_time: float = 500.0) -> np.ndarray:
+    def _smooth_boxcar(self, t: np.ndarray, t0: float, t1: float, rise_time: float = 0.5) -> np.ndarray:
         """
         生成平滑的Boxcar函数 (Sigmoid边界)
         
@@ -83,14 +83,14 @@ class StimulationGenerator:
         task_idx = 0
         
         # 预留开始的一段静息时间
-        current_time += np.random.uniform(1000, 3000)
+        current_time += np.random.uniform(1, 3)
         
-        while current_time < self.duration - 5000: # 留出结尾余量
+        while current_time < self.duration - 5: # 留出结尾余量
             # Task duration: 5s -15s
-            dur = np.random.uniform(5000, 15000)
+            dur = np.random.uniform(5, 15)
             if current_time + dur > self.duration:
-                dur = self.duration - current_time - 1000
-                if dur < 5000: break
+                dur = self.duration - current_time - 1
+                if dur < 5: break
             
             t_start = current_time
             t_end = current_time + dur
@@ -258,8 +258,8 @@ class StimulationGenerator:
         生成Boxcar（矩形波）刺激
         
         参数:
-            onset: 开始时间 (ms)
-            duration: 持续时间 (ms)
+            onset: 开始时间 (s)
+            duration: 持续时间 (s)
             amplitude: 幅度
             nodes: 受刺激的节点索引列表。如果为None，则所有节点受刺激。
             
@@ -296,7 +296,7 @@ class StimulationGenerator:
     def generate_noise(self, 
                        sigma: float = 0.01, 
                        color: str = 'white', 
-                       tau_noise: float = 50.0,
+                       tau_noise: float = 0.05,
                        seed: Optional[int] = None) -> Tuple[np.ndarray, Dict]:
         """
         生成噪声刺激
@@ -304,7 +304,7 @@ class StimulationGenerator:
         参数:
             sigma: 噪声标准差
             color: 'white' (白噪声) 或 'ou' (Ornstein-Uhlenbeck过程/红噪声)
-            tau_noise: OU过程的时间常数 (ms)
+            tau_noise: OU过程的时间常数 (s)
             seed: 随机种子
             
         返回:
@@ -315,20 +315,20 @@ class StimulationGenerator:
             np.random.seed(seed)
             
         if color == 'white':
-            noise = np.random.normal(0, sigma, (self.n_time_steps, self.n_nodes))
+            noise = sigma * np.random.normal(0, 1, (self.n_time_steps, self.n_nodes))
         
         elif color == 'ou':
             # Ornstein-Uhlenbeck process
             # dx = -x/tau * dt + sigma * sqrt(2/tau) * dW
+            # Exact discrete-time update for OU process with stationary std = sigma
             noise = np.zeros((self.n_time_steps, self.n_nodes))
             x = np.zeros(self.n_nodes)
-            
-            sqrt_dt = np.sqrt(self.dt)
-            factor = sigma * np.sqrt(2.0 / tau_noise)
-            decay = 1.0 - self.dt / tau_noise
-            
+
+            exp_decay = np.exp(-self.dt / tau_noise)
+            sd = sigma * np.sqrt(1.0 - exp_decay**2)
+
             for i in range(self.n_time_steps):
-                x = decay * x + factor * sqrt_dt * np.random.normal(0, 1, self.n_nodes)
+                x = exp_decay * x + sd * np.random.normal(0.0, 1.0, self.n_nodes)
                 noise[i] = x
         
         config = {
