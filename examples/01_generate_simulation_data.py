@@ -99,7 +99,8 @@ def main():
     dt = 0.05 # s (时间步长 0.05-0.2s)
     duration = 200.0 # s (Run时长 200s)
     sampling_interval = 0.05 # s (采样间隔)
-    n_samples = 2000 # 演示用样本数
+    n_samples = 1000 # 演示用样本数
+    n_start = 1000 # 样本起始编号
     
     # 记录关键超参数
     logger.info("=== 仿真超参数配置 ===")
@@ -122,7 +123,7 @@ def main():
         # 使用 EIModel
         ode_sim = ODESimulator(n_nodes=n_nodes, dt=dt, duration=duration, model_type='EI')
         
-        for i in range(n_samples):
+        for i in range(n_start,n_start + n_samples):
             # 自动生成 Task 和 刺激
             # run_simulation 会自动调用 generate_task_schedule 如果 stimulus 为 None
             results = ode_sim.run_simulation(
@@ -146,7 +147,7 @@ def main():
     if ENABLE_ODE_SC:
         logger.info("开始ODE仿真 (基于SC, EI Model)...")
         ode_sim = ODESimulator(n_nodes=n_nodes, dt=dt, duration=duration, model_type='EI')
-        for i in range(n_samples):
+        for i in range(n_start,n_start + n_samples):
             results = ode_sim.run_simulation(
                 connectivity=sc_matrix, 
                 stimulus=None,
@@ -181,7 +182,7 @@ def main():
                 
                 pde_sim = PDESimulator(n_nodes=n_vertices, dt=dt, duration=duration, model_type='wave')
                 
-                for i in range(n_samples):
+                for i in range(n_start,n_start + n_samples):
                     # 传入 vertices 以生成空间刺激
                     results = pde_sim.run_simulation(
                         connectivity=surf_adj, 
