@@ -115,6 +115,10 @@ class ODESimulator:
         返回:
             results: 包含神经活动、BOLD信号等的字典
         """
+        # 设置随机种子 (确保整个过程可复现)
+        if noise_seed is not None:
+            np.random.seed(noise_seed)
+
         # 设置连接矩阵
         if self.model_type == 'EI':
             self.model.params['C'] = connectivity
@@ -149,10 +153,6 @@ class ODESimulator:
 
         # 生成噪声
         # ODE 噪声: eta(t) = sigma * epsilon(t)
-        if noise_seed is not None:
-            np.random.seed(noise_seed)
-        
-        # 预生成噪声 (内存允许的情况下)
         # 注意：EI模型状态维度是 2*n_nodes (E和I)，而Bilinear模型是 n_nodes
         # 噪声通常加在所有状态变量上，或者只加在E上？
         # 题目描述: eta(t) = sigma * epsilon(t), epsilon ~ N(0, I).
@@ -234,11 +234,14 @@ class ODESimulator:
             'bold_signal': bold,
             'stimulus_config': stimulus_config,
             'model_params': self.model.params, # 包含生成的 B 和 C
+            'initial_state': initial_state, # 保存初始状态以支持完全复现
             'metadata': {
                 'model_type': self.model_type,
                 'dt': self.dt,
+                'duration': self.duration,
                 'sampling_interval': sampling_interval,
-                'noise_level': noise_level
+                'noise_level': noise_level,
+                'noise_seed': noise_seed # 保存种子
             }
         }
 

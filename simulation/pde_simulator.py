@@ -146,18 +146,23 @@ class PDESimulator:
         states = np.array(states)
         
         # 计算 BOLD 信号
-        bold = self.balloon_model.compute_bold(states, self.dt * sampling_steps)
+        # BalloonModel.compute_bold 期望 t_span 是一个时间点数组，而不是单个 float
+        time_points_downsampled = self.time_points[::sampling_steps]
+        bold = self.balloon_model.compute_bold(states, time_points_downsampled)
         
         return {
-            'time_points': self.time_points[::sampling_steps],
+            'time_points': time_points_downsampled,
             #'neural_activity': states,
             'bold_signal': bold,
             'stimulus_config': stimulus_config,
+            'initial_state': initial_state,
             'metadata': {
                 'model_type': 'Wave_PDE',
                 'dt': self.dt,
+                'duration': self.duration,
                 'sampling_interval': sampling_interval,
-                'noise_level': noise_level
+                'noise_level': noise_level,
+                'noise_seed': noise_seed
             }
         }
 

@@ -50,10 +50,12 @@ def load_connectivity(file_path):
         logger.error(f"Failed to load connectivity from {file_path}: {e}")
         return None
 
-def generate_dummy_ec(n_nodes):
+def generate_dummy_ec(n_nodes, seed=42):
     """生成虚拟有效连接矩阵 (EC)"""
+    if seed is not None:
+        np.random.seed(seed)
     # 随机生成一个稀疏矩阵作为EC
-    print("生成虚拟EC矩阵...")
+    print(f"生成虚拟EC矩阵 (seed={seed})...")
     ec = np.random.randn(n_nodes, n_nodes) * 0.1
     # 稀疏化
     mask = np.random.rand(n_nodes, n_nodes) > 0.8
@@ -90,7 +92,7 @@ def main():
     logger.info(f"加载SC矩阵，大小: {sc_matrix.shape}")
     
     # 2. 生成EC矩阵 (模拟刘泉影的方法)
-    ec_matrix = generate_dummy_ec(n_nodes)
+    ec_matrix = generate_dummy_ec(n_nodes, seed=42)
     logger.info("生成虚拟EC矩阵")
     
     # 3. 仿真参数 (根据 Prompt 要求调整)

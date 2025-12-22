@@ -10,6 +10,5 @@
 from .ode_simulator import ODESimulator
 from .pde_simulator import PDESimulator
 from .stimulation_generator import StimulationGenerator
-from .noise_generator import NoiseGenerator
 
-__all__ = ['ODESimulator', 'PDESimulator', 'StimulationGenerator', 'NoiseGenerator']
+__all__ = ['ODESimulator', 'PDESimulator', 'StimulationGenerator']
