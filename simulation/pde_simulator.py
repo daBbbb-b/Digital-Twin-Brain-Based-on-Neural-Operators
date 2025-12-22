@@ -37,8 +37,8 @@ class PDESimulator:
     
     def __init__(self, 
                  n_nodes: int = 246, 
-                 dt: float = 0.05, 
-                 duration: float = 200.0, 
+                 dt: float = 0.1, 
+                 duration: float = 20000.0, 
                  model_type: str = 'wave',
                  model_params: Optional[Dict] = None):
         
@@ -65,7 +65,7 @@ class PDESimulator:
                        noise_level: float = 0.01,
                        noise_seed: Optional[int] = None,
                        initial_state: Optional[np.ndarray] = None,
-                       sampling_interval: float = 0.05) -> Dict:
+                       sampling_interval: float = 50.0) -> Dict:
         """
         运行单次PDE仿真
         
@@ -78,7 +78,7 @@ class PDESimulator:
             noise_level: 噪声水平
             noise_seed: 噪声随机种子
             initial_state: 初始状态
-            sampling_interval: 采样时间间隔 (s), 默认为0.05s
+            sampling_interval: 采样时间间隔 (ms), 默认为50ms
             
         返回:
             results: 包含神经活动、BOLD信号等的字典
