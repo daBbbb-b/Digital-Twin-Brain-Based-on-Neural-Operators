@@ -150,7 +150,7 @@ class PDESimulator:
         
         return {
             'time_points': self.time_points[::sampling_steps],
-            'neural_activity': states,
+            #'neural_activity': states,
             'bold_signal': bold,
             'stimulus_config': stimulus_config,
             'metadata': {

@@ -230,7 +230,7 @@ class ODESimulator:
         
         return {
             'time_points': time_points_downsampled,
-            'neural_activity': states,
+            #'neural_activity': states,
             'bold_signal': bold,
             'stimulus_config': stimulus_config,
             'model_params': self.model.params, # 包含生成的 B 和 C

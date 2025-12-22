@@ -97,7 +97,7 @@ def main():
     dt = 0.05 # s (时间步长 0.05-0.2s)
     duration = 200.0 # s (Run时长 200s)
     sampling_interval = 0.05 # s (采样间隔)
-    n_samples = 500 # 演示用样本数
+    n_samples = 2000 # 演示用样本数
     
     # 记录关键超参数
     logger.info("=== 仿真超参数配置 ===")
