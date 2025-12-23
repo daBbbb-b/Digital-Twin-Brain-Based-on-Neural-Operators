@@ -8,9 +8,6 @@
 """
 
 from .base_operator import BaseOperator
-from .fno import FNO, FNO1d, FNO2d, FNO3d
-from .deeponet import DeepONet, BranchNet, TrunkNet
-from .operator_ensemble import OperatorEnsemble
+from .fno import FNO1d, FNO2d
 
-__all__ = ['BaseOperator', 'FNO', 'FNO1d', 'FNO2d', 'FNO3d',
-           'DeepONet', 'BranchNet', 'TrunkNet', 'OperatorEnsemble']
+__all__ = ['BaseOperator', 'FNO1d', 'FNO2d']

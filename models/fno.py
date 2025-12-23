@@ -24,272 +24,314 @@ Fourier Neural Operator (FNO) 模块
 
 import torch
 import torch.nn as nn
+import torch.fft
 import torch.nn.functional as F
-from typing import Optional, Tuple
-from .base_operator import BaseOperator
 
-
+################################################################
+#  1. 一维谱卷积层 (Spectral Conv 1D) - 对应论文 Eq(4) & (5)
+################################################################
 class SpectralConv1d(nn.Module):
-    """
-    一维频谱卷积层
-    
-    功能：
-        - 在傅里叶空间进行卷积操作
-        - 实现快速全局信息传播
-        
-    核心思想：
-        1. FFT将输入转换到频域
-        2. 在频域进行线性变换（乘以可学习权重）
-        3. IFFT转换回时域
-        
-    参数说明：
-        in_channels: 输入通道数
-        out_channels: 输出通道数
-        modes: 保留的傅里叶模态数量（控制频率分辨率）
-    """
-    
-    def __init__(self, in_channels: int, out_channels: int, modes: int):
+    def __init__(self, in_channels, out_channels, modes):
+        super(SpectralConv1d, self).__init__()
         """
-        初始化频谱卷积层
-        
-        参数：
-            in_channels (int): 输入通道数
-            out_channels (int): 输出通道数
-            modes (int): 傅里叶模态数量
+        in_channels: 输入特征通道数
+        out_channels: 输出特征通道数
+        modes: 保留的傅里叶模态数量 (截断高频，只留低频)
         """
-        super().__init__()
-        pass
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        前向传播
-        
-        参数：
-            x (torch.Tensor): 输入 (batch, in_channels, length)
-            
-        返回：
-            torch.Tensor: 输出 (batch, out_channels, length)
-        """
-        pass
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.modes = modes
 
+        # 定义可学习的权重参数 (复数张量)
+        # 形状: (in_channels, out_channels, modes)
+        # scale用于初始化权重分布
+        self.scale = (1 / (in_channels * out_channels))
+        w_r = torch.randn(in_channels, out_channels, modes) * self.scale
+        w_i = torch.randn(in_channels, out_channels, modes) * self.scale
+        self.weights = nn.Parameter(torch.stack((w_r, w_i), dim=-1))  # (..., 2)
 
+    # 复数乘法: (batch, in_channel, x) * (in_channel, out_channel, x) -> (batch, out_channel, x)
+    def compl_mul1d(self, input, weights):
+        # 使用 einsum 进行爱因斯坦求和约定，简洁处理维度乘法
+        # "bix,iox->box": 
+        # b=batch, i=in_channels, o=out_channels, x=modes
+        return torch.einsum("bix,iox->box", input, weights)
+
+    def forward(self, x):
+        batchsize = x.shape[0]
+        
+        # 1. 傅里叶变换 (RFFT: 实数到复数)
+        # 输入 x 形状: (batch, in_channels, x_grid)
+        # 输出 x_ft 形状: (batch, in_channels, x_grid/2 + 1)
+        x_ft = torch.fft.rfft(x)
+
+        # 2. 频谱截断与线性变换 (Multiply relevant Fourier modes)
+        # 我们只取前 'modes' 个低频系数进行计算
+        out_ft = torch.zeros(batchsize, self.out_channels, x.size(-1)//2 + 1, device=x.device, dtype=torch.cfloat)
+        
+        # 核心操作 R * F(v)
+        weights_c = torch.view_as_complex(self.weights.to(x.device))
+        out_ft[:, :, :self.modes] = self.compl_mul1d(x_ft[:, :, :self.modes], weights_c)
+
+        # 3. 傅里叶逆变换 (IRFFT: 复数到实数)
+        # 返回物理空间
+        x = torch.fft.irfft(out_ft, n=x.size(-1))
+        return x
+
+################################################################
+#  2. FNO 1D 模型主架构 - 对应论文 Figure 2(a)
+# 针对于一维输入输出函数的学习任务
+################################################################
+class FNO1d(nn.Module):
+    def __init__(self, input_size, output_size, modes, width):
+        super(FNO1d, self).__init__()
+        """
+        modes: 傅里叶层保留的模态数
+        width: 提升后的通道维度 (Hidden channels)
+        """
+        self.input_size = input_size
+        self.output_size = output_size
+        self.modes = modes
+        self.width = width
+        self.padding = 2 # 为了处理边界情况，有时会padding (可选)
+
+        # P: Lifting layer (将输入维度映射到高维特征空间)
+        # 输入通道 = 原始特征 + 1 维坐标网格
+        self.fc0 = nn.Linear(self.input_size + 1, self.width)
+
+        # 4层 Fourier Integral Operators
+        self.conv0 = SpectralConv1d(self.width, self.width, self.modes)
+        self.conv1 = SpectralConv1d(self.width, self.width, self.modes)
+        self.conv2 = SpectralConv1d(self.width, self.width, self.modes)
+        self.conv3 = SpectralConv1d(self.width, self.width, self.modes)
+
+        # W: 对应的本地线性变换 (Skip connection / 1x1 Conv)
+        self.w0 = nn.Conv1d(self.width, self.width, 1)
+        self.w1 = nn.Conv1d(self.width, self.width, 1)
+        self.w2 = nn.Conv1d(self.width, self.width, 1)
+        self.w3 = nn.Conv1d(self.width, self.width, 1)
+
+        # Q: Projection layer (将特征映射回目标输出维度)
+        self.fc1 = nn.Linear(self.width, 128)
+        self.fc2 = nn.Linear(128, self.output_size) # 输出维度为 output_size
+
+    def forward(self, x):
+        # x shape: (batch, grid_size, self.input_size)
+        grid = self.get_grid(x.shape, x.device)
+        x = torch.cat((x, grid), dim=-1) # 将坐标信息拼接到输入中
+        
+        # 1. Lifting
+        x = self.fc0(x)
+        x = x.permute(0, 2, 1) # 调整为 (batch, channels, grid) 适应 Conv1d
+
+        # 2. Iterative Layers (Eq 2: v_{t+1} = sigma(W v_t + K(v_t)))
+        
+        # Layer 0
+        x1 = self.conv0(x)
+        x2 = self.w0(x)
+        x = x1 + x2
+        x = F.gelu(x) # 论文中多用 ReLU，但在新版本官方代码常改用 GELU
+
+        # Layer 1
+        x1 = self.conv1(x)
+        x2 = self.w1(x)
+        x = x1 + x2
+        x = F.gelu(x)
+
+        # Layer 2
+        x1 = self.conv2(x)
+        x2 = self.w2(x)
+        x = x1 + x2
+        x = F.gelu(x)
+
+        # Layer 3
+        x1 = self.conv3(x)
+        x2 = self.w3(x)
+        x = x1 + x2
+        # 最后一层通常不加激活，或者在投影层加
+
+        # 3. Projection
+        x = x.permute(0, 2, 1) # 换回 (batch, grid, channels)
+        x = self.fc1(x)
+        x = F.gelu(x)
+        x = self.fc2(x)
+        
+        return x
+
+    def get_grid(self, shape, device):
+        # 生成空间坐标网格，范围 [0, 1]
+        batchsize, size_x = shape[0], shape[1]
+        gridx = torch.tensor(torch.linspace(0, 1, size_x), dtype=torch.float)
+        gridx = gridx.reshape(1, size_x, 1).repeat([batchsize, 1, 1])
+        return gridx.to(device)
+
+################################################################
+#  3. 二维谱卷积层 (Spectral Conv 2D) - 适用于 Navier-Stokes
+# 针对二维输入输出函数的学习任务
+################################################################
 class SpectralConv2d(nn.Module):
-    """
-    二维频谱卷积层
-    
-    用于处理时空数据（时间 × 空间）
-    """
-    
-    def __init__(self, in_channels: int, out_channels: int, modes1: int, modes2: int):
+    def __init__(self, in_channels, out_channels, modes1, modes2):
+        super(SpectralConv2d, self).__init__()
         """
-        初始化二维频谱卷积层
+        2D 版本需要保留两个方向的模态 (modes1, modes2)
+        """
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.modes1 = modes1 # x轴模态数
+        self.modes2 = modes2 # y轴模态数
+
+        self.scale = (1 / (in_channels * out_channels))
+        w1r = torch.randn(in_channels, out_channels, self.modes1, self.modes2) * self.scale
+        w1i = torch.randn(in_channels, out_channels, self.modes1, self.modes2) * self.scale
+        w2r = torch.randn(in_channels, out_channels, self.modes1, self.modes2) * self.scale
+        w2i = torch.randn(in_channels, out_channels, self.modes1, self.modes2) * self.scale
+        self.weights1 = nn.Parameter(torch.stack((w1r, w1i), dim=-1))
+        self.weights2 = nn.Parameter(torch.stack((w2r, w2i), dim=-1))
+
+    def compl_mul2d(self, input, weights):
+        # (batch, in, x, y), (in, out, x, y) -> (batch, out, x, y)
+        return torch.einsum("bixy,ioxy->boxy", input, weights)
+
+    def forward(self, x):
+        batchsize = x.shape[0]
+        # x: (batch, in_channels, x_grid, y_grid)
         
-        参数：
-            in_channels (int): 输入通道数
-            out_channels (int): 输出通道数
-            modes1 (int): 第一维模态数
-            modes2 (int): 第二维模态数
-        """
-        super().__init__()
-        pass
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        前向传播
+        # 2D FFT
+        x_ft = torch.fft.rfft2(x)
+
+        # 准备输出容器
+        out_ft = torch.zeros(batchsize, self.out_channels, x.size(-2), x.size(-1)//2 + 1, device=x.device, dtype=torch.cfloat)
         
-        参数：
-            x (torch.Tensor): 输入 (batch, in_channels, height, width)
+        # 2D 频谱截断技巧：
+        # rfft2 输出维度中，dim=-1 是 [0, ..., N/2]，dim=-2 是 [0, ..., N-1]
+        # 低频主要集中在四个角，由于 rfft 的性质，我们只需要处理两个角：
+        # 1. 左上角 (Top-Left): 对应正频率低频
+        # 2. 左下角 (Bottom-Left): 对应负频率低频 (wrapped around)
+        
+        # 处理左上角: indices [0:modes1, 0:modes2]
+        w1_c = torch.view_as_complex(self.weights1.to(x.device))
+        out_ft[:, :, :self.modes1, :self.modes2] = \
+            self.compl_mul2d(x_ft[:, :, :self.modes1, :self.modes2], w1_c)
             
-        返回：
-            torch.Tensor: 输出 (batch, out_channels, height, width)
-        """
-        pass
+        # 处理左下角: indices [-modes1:, 0:modes2]
+        w2_c = torch.view_as_complex(self.weights2.to(x.device))
+        out_ft[:, :, -self.modes1:, :self.modes2] = \
+            self.compl_mul2d(x_ft[:, :, -self.modes1:, :self.modes2], w2_c)
 
+        # Inverse FFT
+        x = torch.fft.irfft2(out_ft, s=(x.size(-2), x.size(-1)))
+        return x
 
-class FNO1d(BaseOperator):
-    """
-    一维Fourier Neural Operator
-    
-    功能：
-        - 学习时间序列到时间序列的映射
-        - 用于ODE问题：从连接矩阵预测刺激函数或解轨迹
-        
-    网络结构：
-        1. 输入提升层：将输入维度提升到高维特征空间
-        2. 多层频谱卷积 + 点卷积：学习全局和局部特征
-        3. 输出投影层：将特征投影到输出空间
-        
-    输入格式：
-        - connectivity: 连接矩阵 (batch, n_nodes, n_nodes)
-        - grid: 时间网格 (batch, n_timepoints)
-        
-    输出格式：
-        - stimulus: 刺激函数 (batch, n_timepoints, n_nodes)
-    """
-    
-    def __init__(self,
-                 modes: int = 16,
-                 width: int = 64,
-                 n_layers: int = 4,
-                 input_dim: int = 1,
-                 output_dim: int = 1):
-        """
-        初始化FNO1d
-        
-        参数：
-            modes (int): 傅里叶模态数量
-            width (int): 通道宽度
-            n_layers (int): 频谱卷积层数
-            input_dim (int): 输入维度
-            output_dim (int): 输出维度
-        """
-        super().__init__(input_dim, output_dim, width)
-        pass
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        前向传播
-        
-        参数：
-            x (torch.Tensor): 输入，形状为：
-                - 连接矩阵 + 时间网格的组合
-                - (batch, length, input_dim)
-                
-        返回：
-            torch.Tensor: 输出 (batch, length, output_dim)
-        """
-        pass
+class FNO2d(nn.Module):
+    def __init__(self, input_size, output_size, modes1, modes2, width):
+        super(FNO2d, self).__init__()
 
+        self.input_size = input_size
+        self.output_size = output_size
+        self.modes1 = modes1
+        self.modes2 = modes2
+        self.width = width
+        self.padding = 9 # 用于处理非周期边界时的padding，可视情况调整
 
-class FNO2d(BaseOperator):
-    """
-    二维Fourier Neural Operator
-    
-    功能：
-        - 学习时空数据的映射
-        - 用于PDE问题：皮层上的活动扩散
-        
-    输入格式：
-        - cortical_connectivity: 皮层连接矩阵
-        - spatial_grid: 空间网格
-        - temporal_grid: 时间网格
-        
-    输出格式：
-        - spatiotemporal_stimulus: 时空刺激 (batch, n_timepoints, n_vertices)
-    """
-    
-    def __init__(self,
-                 modes1: int = 12,
-                 modes2: int = 12,
-                 width: int = 32,
-                 n_layers: int = 4,
-                 input_dim: int = 3,
-                 output_dim: int = 1):
-        """
-        初始化FNO2d
-        
-        参数：
-            modes1 (int): 第一维（时间）模态数
-            modes2 (int): 第二维（空间）模态数
-            width (int): 通道宽度
-            n_layers (int): 层数
-            input_dim (int): 输入维度
-            output_dim (int): 输出维度
-        """
-        super().__init__(input_dim, output_dim, width)
-        pass
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        前向传播
-        
-        参数：
-            x (torch.Tensor): 输入 (batch, height, width, input_dim)
-            
-        返回：
-            torch.Tensor: 输出 (batch, height, width, output_dim)
-        """
-        pass
+        # 假设输入包含原始特征 + (x, y) 两个坐标通道
+        self.fc0 = nn.Linear(self.input_size + 2, self.width) 
 
+        self.conv0 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
+        self.conv1 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
+        self.conv2 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
+        self.conv3 = SpectralConv2d(self.width, self.width, self.modes1, self.modes2)
 
-class FNO3d(BaseOperator):
-    """
-    三维Fourier Neural Operator
-    
-    功能：
-        - 处理三维时空数据
-        - 可用于全脑体积数据
-    """
-    
-    def __init__(self,
-                 modes1: int = 8,
-                 modes2: int = 8,
-                 modes3: int = 8,
-                 width: int = 32,
-                 n_layers: int = 4,
-                 input_dim: int = 4,
-                 output_dim: int = 1):
-        """
-        初始化FNO3d
-        
-        参数：
-            modes1, modes2, modes3 (int): 三个维度的模态数
-            width (int): 通道宽度
-            n_layers (int): 层数
-            input_dim (int): 输入维度
-            output_dim (int): 输出维度
-        """
-        super().__init__(input_dim, output_dim, width)
-        pass
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        前向传播
-        
-        参数：
-            x (torch.Tensor): 输入 (batch, depth, height, width, input_dim)
-            
-        返回：
-            torch.Tensor: 输出 (batch, depth, height, width, output_dim)
-        """
-        pass
+        self.w0 = nn.Conv2d(self.width, self.width, 1)
+        self.w1 = nn.Conv2d(self.width, self.width, 1)
+        self.w2 = nn.Conv2d(self.width, self.width, 1)
+        self.w3 = nn.Conv2d(self.width, self.width, 1)
 
+        self.fc1 = nn.Linear(self.width, 128)
+        self.fc2 = nn.Linear(128, self.output_size)
 
-class FNO(nn.Module):
-    """
-    通用FNO接口
+    def forward(self, x):
+        # x: (batch, size_x, size_y, 1) -> 函数值
+        grid = self.get_grid(x.shape, x.device)
+        x = torch.cat((x, grid), dim=-1)
+        
+        x = self.fc0(x)
+        x = x.permute(0, 3, 1, 2)
+
+        x1 = self.conv0(x)
+        x2 = self.w0(x)
+        x = x1 + x2
+        x = F.gelu(x)
+
+        x1 = self.conv1(x)
+        x2 = self.w1(x)
+        x = x1 + x2
+        x = F.gelu(x)
+
+        x1 = self.conv2(x)
+        x2 = self.w2(x)
+        x = x1 + x2
+        x = F.gelu(x)
+
+        x1 = self.conv3(x)
+        x2 = self.w3(x)
+        x = x1 + x2
+
+        x = x.permute(0, 2, 3, 1)
+        x = self.fc1(x)
+        x = F.gelu(x)
+        x = self.fc2(x)
+        return x
+
+    def get_grid(self, shape, device):
+        batchsize, size_x, size_y = shape[0], shape[1], shape[2]
+        gridx = torch.tensor(torch.linspace(0, 1, size_x), dtype=torch.float)
+        gridx = gridx.reshape(1, size_x, 1, 1).repeat([batchsize, 1, size_y, 1])
+        gridy = torch.tensor(torch.linspace(0, 1, size_y), dtype=torch.float)
+        gridy = gridy.reshape(1, 1, size_y, 1).repeat([batchsize, size_x, 1, 1])
+        return torch.cat((gridx, gridy), dim=-1).to(device)
+
+################################################################
+#  4. 简单测试与运行示例
+################################################################
+
+if __name__ == "__main__":
+    # --- 1D 示例 (Burgers) ---
+    print("--- Testing FNO 1D ---")
+    # 参数设置
+    input_size = 1
+    output_size = 1
+    modes = 16
+    width = 64
+    batch_size = 10
+    grid_size = 1024 # 分辨率 s=1024
+
+    model = FNO1d(input_size, output_size, modes, width)
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
+
+    # 模拟输入数据: (Batch, Grid, Channels)
+    # 输入通常是初始条件 u0(x)，我们将其作为 (Batch, Grid, 1) 的张量
+    input_data = torch.randn(batch_size, grid_size, 1)
     
-    功能：
-        - 根据数据维度自动选择FNO1d/2d/3d
-        - 提供统一的训练和推理接口
-        
-    使用示例：
-        # 对于时间序列数据（ODE）
-        fno = FNO(dim=1, modes=16, width=64, n_layers=4)
-        
-        # 对于时空数据（PDE）
-        fno = FNO(dim=2, modes1=12, modes2=12, width=32, n_layers=4)
-    """
+    # 前向传播
+    # 模型内部会自动 append 坐标网格，所以 fc0 输入维度是 1(data) + 1(grid) = 2
+    output = model(input_data)
     
-    def __init__(self, dim: int, **kwargs):
-        """
-        初始化FNO
-        
-        参数：
-            dim (int): 数据维度（1, 2, 或 3）
-            **kwargs: 传递给具体FNO类的参数
-        """
-        super().__init__()
-        pass
+    print(f"Input shape: {input_data.shape}")
+    print(f"Output shape: {output.shape}") # 预期 (10, 1024, 1)
+
+    # --- 2D 示例 (Navier-Stokes) ---
+    print("\n--- Testing FNO 2D ---")
+    modes1 = 12
+    modes2 = 12
+    width = 32
+    grid_size_x = 64
+    grid_size_y = 64
+
+    model_2d = FNO2d(input_size, output_size, modes1, modes2, width)
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        前向传播
-        
-        参数：
-            x (torch.Tensor): 输入
-            
-        返回：
-            torch.Tensor: 输出
-        """
-        pass
+    # 模拟输入: (Batch, X, Y, 1)
+    input_2d = torch.randn(batch_size, grid_size_x, grid_size_y, 1)
+    
+    output_2d = model_2d(input_2d)
+    print(f"Input 2D shape: {input_2d.shape}")
+    print(f"Output 2D shape: {output_2d.shape}") # 预期 (10, 64, 64, 1)

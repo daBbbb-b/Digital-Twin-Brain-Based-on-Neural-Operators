@@ -55,7 +55,6 @@ logs/
 *.log
 
 # 结果文件
-results/
 figures/
 
 # 临时文件
