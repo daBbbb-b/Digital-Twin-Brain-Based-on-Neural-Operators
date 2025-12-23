@@ -96,16 +96,16 @@ def main():
     logger.info("生成虚拟EC矩阵")
     
     # 3. 仿真参数 (根据 Prompt 要求调整)
-    dt = 0.05 # s (时间步长 0.05-0.2s)
-    duration = 200.0 # s (Run时长 200s)
-    sampling_interval = 0.05 # s (采样间隔)
-    n_samples = 1000 # 演示用样本数
-    n_start = 1000 # 样本起始编号
+    dt = 1.0 # ms (物理仿真步长，建议 <= 1ms 以保证 PDE 稳定性)
+    duration = 200000.0 # ms (Run时长 200s)
+    sampling_interval = 50 # ms (采样/记录间隔)
+    n_samples = 2000 # 演示用样本数
+    n_start = 0 # 样本起始编号
     
     # 记录关键超参数
     logger.info("=== 仿真超参数配置 ===")
     logger.info(f"时间步长 (dt): {dt} s")
-    logger.info(f"仿真时长 (duration): {duration} ms")
+    logger.info(f"仿真时长 (duration): {duration} s")
     logger.info(f"采样间隔 (sampling_interval): {sampling_interval} s")
     logger.info(f"样本数量 (n_samples): {n_samples}")
     logger.info(f"ODE(EC) 启用: {ENABLE_ODE_EC}")

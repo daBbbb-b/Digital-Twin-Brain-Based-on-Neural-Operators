@@ -26,9 +26,9 @@ import scipy.sparse as sparse
 class TaskEvent:
     """定义一个Task事件"""
     index: int
-    start_time: float  #s
-    end_time: float  #s
-    duration: float  #s
+    start_time: float
+    end_time: float
+    duration: float
     # ODE 参数
     active_channels: List[int] = field(default_factory=list)
     amplitudes_ode: List[float] = field(default_factory=list)
@@ -36,6 +36,28 @@ class TaskEvent:
     seed_vertices: List[int] = field(default_factory=list)
     amplitude_pde: float = 0.0
     sigma_s: float = 10.0
+
+class PDEStimulus:
+    """PDE刺激函数包装器，避免生成巨大的 (T, N) 数组"""
+    def __init__(self, n_verts, dt, duration, task_data):
+        self.n_verts = n_verts
+        self.dt = dt
+        self.duration = duration
+        self.task_data = task_data # List of dicts with 'envelope', 'spatial_map', 'amp'
+
+    def __call__(self, t):
+        idx = int(round(t / self.dt))
+        # 简单的边界保护
+        if idx < 0: idx = 0
+        
+        u_t = np.zeros(self.n_verts)
+        for data in self.task_data:
+            # envelope 是 (T,) 数组
+            if idx < len(data['envelope']):
+                val = data['envelope'][idx]
+                if abs(val) > 1e-6:
+                    u_t += data['amp'] * val * data['spatial_map']
+        return u_t
 
 class StimulationGenerator:
     """
@@ -49,7 +71,7 @@ class StimulationGenerator:
         self.time_points = np.arange(0, duration, dt)
         self.n_time_steps = len(self.time_points)
         
-    def _smooth_boxcar(self, t: np.ndarray, t0: float, t1: float, rise_time: float = 0.5) -> np.ndarray:
+    def _smooth_boxcar(self, t: np.ndarray, t0: float, t1: float, rise_time: float = 500.0) -> np.ndarray:
         """
         生成平滑的Boxcar函数 (Sigmoid边界)
         
@@ -83,14 +105,14 @@ class StimulationGenerator:
         task_idx = 0
         
         # 预留开始的一段静息时间
-        current_time += np.random.uniform(1, 3)
+        current_time += np.random.uniform(1000, 3000)
         
-        while current_time < self.duration - 5: # 留出结尾余量
+        while current_time < self.duration - 5000: # 留出结尾余量
             # Task duration: 5s -15s
-            dur = np.random.uniform(5, 15)
+            dur = np.random.uniform(5000, 15000)
             if current_time + dur > self.duration:
-                dur = self.duration - current_time - 1
-                if dur < 5: break
+                dur = self.duration - current_time - 1000
+                if dur < 5000: break
             
             t_start = current_time
             t_end = current_time + dur
@@ -181,57 +203,52 @@ class StimulationGenerator:
     def generate_pde_stimulus(self, 
                             tasks: List[TaskEvent], 
                             vertices: np.ndarray,
-                            faces: Optional[np.ndarray] = None) -> Tuple[np.ndarray, Dict]:
+                            faces: Optional[np.ndarray] = None) -> Tuple[Union[np.ndarray, Callable], Dict]:
         """
         生成 PDE 刺激 u_pde(s, t)
         
         参数:
             vertices: (N, 3) 顶点坐标
-            faces: (M, 3) 面索引 (用于计算测地距离，如果未提供则使用欧氏距离)
+            faces: (M, 3) 面索引
             
         返回:
-            u_pde: (n_time_steps, n_vertices)
+            u_pde: Callable (t -> np.ndarray) or np.ndarray
             config: 配置信息
         """
         n_verts = vertices.shape[0]
-        u_pde = np.zeros((self.n_time_steps, n_verts))
         
-        # 预计算距离可能太慢，按需计算
-        # 使用欧氏距离近似测地距离 (对于局部 patch 误差可接受)
-        # 或者如果提供了 faces，可以使用简单的图搜索 (Dijkstra)
+        # 预计算任务的空间分布和时间包络
+        task_data = []
         
         for task in tasks:
             if not task.seed_vertices:
                 continue
                 
-            # 时间包络
+            # 时间包络 (T,)
             envelope = self._smooth_boxcar(self.time_points, task.start_time, task.end_time)
             
-            # 空间分布 phi(s)
+            # 空间分布 phi(s) (N,)
             spatial_map = np.zeros(n_verts)
             
             for seed in task.seed_vertices:
                 seed_pos = vertices[seed]
                 # 计算所有点到 seed 的距离 (欧氏距离近似)
-                # dists = || v - seed ||
                 dists = np.linalg.norm(vertices - seed_pos, axis=1)
                 
                 # Gaussian patch
-                # phi(s) = exp(-d^2 / (2 * sigma^2))
                 patch = np.exp(-dists**2 / (2 * task.sigma_s**2))
-                
-                # 截断过小的值以保持稀疏性/局部性 (可选)
                 patch[patch < 0.01] = 0
                 
                 spatial_map += patch
             
-            # 归一化或限制叠加后的最大值? 
-            # 题目未要求，但通常保持幅度一致
-            # 这里直接叠加，幅度由 amplitude_pde 控制
-            
-            # u(s, t) += amp * phi(s) * s(t)
-            # 外积: (T, 1) * (1, N) -> (T, N)
-            u_pde += task.amplitude_pde * np.outer(envelope, spatial_map)
+            task_data.append({
+                'envelope': envelope,
+                'spatial_map': spatial_map,
+                'amp': task.amplitude_pde
+            })
+
+        # 返回 Callable 对象
+        u_pde = PDEStimulus(n_verts, self.dt, self.duration, task_data)
             
         config = {
             'type': 'task_based_pde',
@@ -258,8 +275,8 @@ class StimulationGenerator:
         生成Boxcar（矩形波）刺激
         
         参数:
-            onset: 开始时间 (s)
-            duration: 持续时间 (s)
+            onset: 开始时间 (ms)
+            duration: 持续时间 (ms)
             amplitude: 幅度
             nodes: 受刺激的节点索引列表。如果为None，则所有节点受刺激。
             
@@ -296,7 +313,7 @@ class StimulationGenerator:
     def generate_noise(self, 
                        sigma: float = 0.01, 
                        color: str = 'white', 
-                       tau_noise: float = 0.05,
+                       tau_noise: float = 50.0,
                        seed: Optional[int] = None) -> Tuple[np.ndarray, Dict]:
         """
         生成噪声刺激
@@ -304,7 +321,7 @@ class StimulationGenerator:
         参数:
             sigma: 噪声标准差
             color: 'white' (白噪声) 或 'ou' (Ornstein-Uhlenbeck过程/红噪声)
-            tau_noise: OU过程的时间常数 (s)
+            tau_noise: OU过程的时间常数 (ms)
             seed: 随机种子
             
         返回:
@@ -315,20 +332,23 @@ class StimulationGenerator:
             np.random.seed(seed)
             
         if color == 'white':
-            noise = sigma * np.random.normal(0, 1, (self.n_time_steps, self.n_nodes))
+            noise = np.random.normal(0, sigma, (self.n_time_steps, self.n_nodes))
         
         elif color == 'ou':
             # Ornstein-Uhlenbeck process
             # dx = -x/tau * dt + sigma * sqrt(2/tau) * dW
-            # Exact discrete-time update for OU process with stationary std = sigma
             noise = np.zeros((self.n_time_steps, self.n_nodes))
-            x = np.zeros(self.n_nodes)
-
-            exp_decay = np.exp(-self.dt / tau_noise)
-            sd = sigma * np.sqrt(1.0 - exp_decay**2)
-
+            # 精确离散 OU 过程更新
+            # 连续 SDE: dX = -X/tau_noise dt + sigma * sqrt(2/tau_noise) dW
+            theta = 1.0 / tau_noise
+            decay = np.exp(-theta * self.dt)  # e^{-theta dt} = e^{-dt/tau}
+            # 增量标准差遵循精确解的方差：Var = sigma^2 * (1 - e^{-2 theta dt})
+            incr_std = sigma * np.sqrt(1.0 - decay**2)
+            # 初始状态采用平稳分布 N(0, sigma^2)
+            x = np.random.normal(0.0, sigma, size=self.n_nodes)
+            
             for i in range(self.n_time_steps):
-                x = exp_decay * x + sd * np.random.normal(0.0, 1.0, self.n_nodes)
+                x = decay * x + incr_std * np.random.normal(0.0, 1.0, size=self.n_nodes)
                 noise[i] = x
         
         config = {
