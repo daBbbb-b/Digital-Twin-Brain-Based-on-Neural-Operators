@@ -37,7 +37,7 @@ class PDESimulator:
     
     def __init__(self, 
                  n_nodes: int = 246, 
-                 dt: float = 0.1, 
+                 dt: float = 50.0, 
                  duration: float = 20000.0, 
                  model_type: str = 'wave',
                  model_params: Optional[Dict] = None):
@@ -54,6 +54,7 @@ class PDESimulator:
             raise ValueError(f"Unknown model type: {model_type}")
             
         self.balloon_model = BalloonModel()
+        # 初始化刺激生成器 (单位: ms)
         self.stim_generator = StimulationGenerator(n_nodes, dt, duration)
         
     def run_simulation(self, 

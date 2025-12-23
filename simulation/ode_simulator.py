@@ -37,8 +37,8 @@ class ODESimulator:
     
     def __init__(self, 
                  n_nodes: int = 246, 
-                 dt: float = 0.1, 
-                 duration: float = 20000.0, # 20 seconds
+                 dt: float = 50.0,    # 50 ms
+                 duration: float = 20000.0, # 20 seconds(ms)
                  model_type: str = 'EI',
                  model_params: Optional[Dict] = None):
         
@@ -60,7 +60,7 @@ class ODESimulator:
         # 初始化血氧动力学模型
         self.balloon_model = BalloonModel()
         
-        # 初始化刺激生成器
+        # 初始化刺激生成器 (单位: ms)
         self.stim_generator = StimulationGenerator(n_nodes, dt, duration)
         
     def _generate_bilinear_matrices(self, n_channels: int) -> Tuple[np.ndarray, np.ndarray]:

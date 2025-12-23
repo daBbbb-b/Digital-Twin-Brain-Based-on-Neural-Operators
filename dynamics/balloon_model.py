@@ -52,13 +52,14 @@ class BalloonModel:
     
     def __init__(self, params: Optional[Dict] = None):
         # 默认参数 (Friston et al., 2003)
+        # 注意：Balloon 模型内部参数单位均为 秒 (s)
         self.default_params = {
-            'kappa': 0.65,  # 信号衰减率
-            'gamma': 0.41,  # 流量依赖性消除率
-            'tau': 0.98,    # 血流动力学传递时间
-            'alpha': 0.32,  # Grubb指数
-            'E0': 0.4,      # 静息氧摄取分数
-            'V0': 0.04,     # 静息血容量分数
+            'kappa': 0.65,  # 信号衰减率 (s^-1)
+            'gamma': 0.41,  # 流量依赖性消除率 (s^-1)
+            'tau': 0.98,    # 血流动力学传递时间 (s)
+            'alpha': 0.32,  # Grubb指数 (无量纲)
+            'E0': 0.4,      # 静息氧摄取分数 (无量纲)
+            'V0': 0.04,     # 静息血容量分数 (无量纲)
             'k1': 7 * 0.4,  # BOLD常数 k1 = 7 * E0
             'k2': 2.0,      # BOLD常数
             'k3': 2 * 0.4 - 0.2, # BOLD常数 k3 = 2 * E0 - 0.2
@@ -74,7 +75,7 @@ class BalloonModel:
         
         参数:
             neural_activity: 神经活动时间序列 (n_time_steps, n_nodes)
-            t_span: 时间点数组 (n_time_steps,)
+            t_span: 时间点数组 (n_time_steps,) [单位: ms]
             
         返回:
             bold_signal: BOLD信号 (n_time_steps, n_nodes)
@@ -94,8 +95,9 @@ class BalloonModel:
         # 定义ODE系统
         def balloon_dynamics(state, t):
             # 找到当前时间对应的神经活动 (简单的插值或最近邻)
-            # 这里假设t_span是均匀的，直接计算索引
-            idx = int(np.clip(np.searchsorted(t_span, t), 0, n_time_steps - 1))
+            # 这里的 t 输入为 秒 (s)，需要转换为 ms 才能在 t_span 中查找
+            t_ms = t * 1000.0
+            idx = int(np.clip(np.searchsorted(t_span, t_ms), 0, n_time_steps - 1))
             z = neural_activity[idx]
             
             s = state[0*n_nodes : 1*n_nodes]
@@ -124,21 +126,25 @@ class BalloonModel:
             return np.concatenate([ds, df, dv, dq])
         
         # 求解ODE
-        # 注意：odeint可能会使用自适应步长，这里我们强制使用t_span
-        # 但为了效率，我们可能需要自己实现简单的欧拉积分，因为neural_activity是离散的
-        # 使用简单的欧拉积分通常足够且更快
+        # 传入的 t_span 单位为 ms，但 Balloon 模型参数 (tau, kappa, gamma) 单位为 s
+        # 因此我们需要将 dt 转换为秒 (s)
         
-        dt = t_span[1] - t_span[0]
+        dt_ms = t_span[1] - t_span[0]
+        dt_s = dt_ms / 1000.0
+        
         states = np.zeros((n_time_steps, 4 * n_nodes))
         states[0] = initial_state
         
         current_state = initial_state
         
         # 欧拉积分循环
-        # 为了稳定性，如果dt太大，进行子步积分
-        internal_dt = 0.01 # 10ms or smaller is better for Balloon model stability
-        steps_per_sample = int(np.ceil(dt / internal_dt))
-        real_dt = dt / steps_per_sample
+        # 为了稳定性，内部积分步长设为 10ms (0.01s) 或更小
+        internal_dt_s = 0.01 
+        if dt_s < internal_dt_s:
+            internal_dt_s = dt_s
+            
+        steps_per_sample = int(np.ceil(dt_s / internal_dt_s))
+        real_dt_s = dt_s / steps_per_sample # 实际积分步长 (s)
         
         for i in range(1, n_time_steps):
             z = neural_activity[i-1]
@@ -168,11 +174,11 @@ class BalloonModel:
                 dv = (f - v**(1/alpha)) / tau
                 dq = (f * E_f / E0 - q * v**(1/alpha - 1)) / tau
                 
-                # 更新状态
-                s_new = s + ds * real_dt
-                f_new = f + df * real_dt
-                v_new = v + dv * real_dt
-                q_new = q + dq * real_dt
+                # 更新状态 (注意这里必须用秒单位的步长)
+                s_new = s + ds * real_dt_s
+                f_new = f + df * real_dt_s
+                v_new = v + dv * real_dt_s
+                q_new = q + dq * real_dt_s
                 
                 current_state = np.concatenate([s_new, f_new, v_new, q_new])
             

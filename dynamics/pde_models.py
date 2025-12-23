@@ -40,23 +40,36 @@ class PDEModel:
         
     def set_laplacian(self, adjacency_matrix: Union[np.ndarray, csr_matrix]):
         """
-        计算图拉普拉斯矩阵 L = D - A
-        支持稀疏矩阵
+        计算图拉普拉斯矩阵
+        优化：使用对称归一化拉普拉斯矩阵 (Symmetric Normalized Laplacian)
+        L_sys = D^-1/2 * L * D^-1/2 = I - D^-1/2 * A * D^-1/2
+        这消除了节点度数不均匀对扩散的影响，更接近几何拉普拉斯算子。
         """
         if sparse.issparse(adjacency_matrix):
+            # 计算度数
             degree = np.array(adjacency_matrix.sum(axis=1)).flatten()
-            D = sparse.diags(degree)
-            self.laplacian = D - adjacency_matrix
+            
+            # 避免除零
+            d_inv_sqrt = np.power(degree, -0.5)
+            d_inv_sqrt[np.isinf(d_inv_sqrt)] = 0.0
+            
+            # 构建对角矩阵 D^-1/2
+            D_inv_sqrt = sparse.diags(d_inv_sqrt)
+            
+            # L_sym = I - D^-1/2 * A * D^-1/2
+            ident = sparse.eye(self.n_nodes)
+            self.laplacian = ident - D_inv_sqrt @ adjacency_matrix @ D_inv_sqrt
+            
+            # 强制转换为 CSR 格式，优化后续的矩阵向量乘法 (SpMV)
+            self.laplacian = self.laplacian.tocsr()
         else:
             degree = np.sum(adjacency_matrix, axis=1)
-            D = np.diag(degree)
-            self.laplacian = D - adjacency_matrix
-        
-        # 归一化 (可选)
-        # d_inv_sqrt = np.power(degree, -0.5)
-        # d_inv_sqrt[np.isinf(d_inv_sqrt)] = 0
-        # D_inv_sqrt = np.diag(d_inv_sqrt)
-        # self.laplacian = np.eye(self.n_nodes) - D_inv_sqrt @ adjacency_matrix @ D_inv_sqrt
+            d_inv_sqrt = np.power(degree, -0.5)
+            d_inv_sqrt[np.isinf(d_inv_sqrt)] = 0.0
+            D_inv_sqrt = np.diag(d_inv_sqrt)
+            
+            ident = np.eye(self.n_nodes)
+            self.laplacian = ident - D_inv_sqrt @ adjacency_matrix @ D_inv_sqrt
         
     def dynamics(self, t: float, state: np.ndarray, stimulus: Optional[np.ndarray] = None) -> np.ndarray:
         raise NotImplementedError
@@ -65,7 +78,7 @@ class WaveEquationModel(PDEModel):
     """
     阻尼波动方程模型 (Damped Wave Equation)
     
-    d^2u/dt^2 + gamma * du/dt + c^2 * L * u = F(u) + stimulus
+    d^2u/dt^2 + gamma * du/dt + c^2 * L * u = alpha * F(u) + stimulus
     
     状态变量 state: [u, v] 其中 v = du/dt
     """
@@ -73,10 +86,13 @@ class WaveEquationModel(PDEModel):
     def __init__(self, n_nodes: int, params: Optional[Dict] = None):
         super().__init__(n_nodes, params)
         
+        # 注意：时间单位统一为毫秒 (ms)，空间单位为毫米 (mm)
         self.default_params = {
-            'gamma': 0.5,    # 阻尼系数
-            'c': 10.0,       # 传播速度
-            'L': None,       # 拉普拉斯矩阵
+            'gamma': 0.23,   # 阻尼系数 (ms^-1)
+                             # 对应 Friston 2003 的 2*gamma_s, gamma_s ~ 116 s^-1 = 0.116 ms^-1
+            'c': 2.0,        # 传播速度 (mm/ms) 
+            'alpha': 100.0,  # 非线性项增益 (最大发放率，单位 Hz 或 arbitrary)
+            'L': None,       # 拉普拉斯矩阵 (基于 mm 单位的网格计算)
             'activation': 'sigmoid' # 非线性激活函数
         }
         if params:
@@ -87,7 +103,9 @@ class WaveEquationModel(PDEModel):
             self.laplacian = self.params['L']
             
     def sigmoid(self, x):
-        return 1.0 / (1.0 + np.exp(-x))
+        """数值稳定的Sigmoid函数"""
+        x = np.asarray(x, dtype=np.float64)
+        return np.where(x >= 0, 1.0 / (1.0 + np.exp(-x)), np.exp(x) / (1.0 + np.exp(x)))
             
     def dynamics(self, t: float, state: np.ndarray, stimulus: Optional[np.ndarray] = None) -> np.ndarray:
         """
@@ -100,6 +118,7 @@ class WaveEquationModel(PDEModel):
         
         gamma = self.params['gamma']
         c = self.params['c']
+        alpha = self.params.get('alpha', 1.0) # 获取非线性增益，默认1.0
         
         if self.laplacian is None:
             raise ValueError("Laplacian matrix not set. Call set_laplacian() first.")
@@ -109,7 +128,7 @@ class WaveEquationModel(PDEModel):
         
         # 波动方程
         # du/dt = v
-        # dv/dt = -gamma * v - c^2 * L * u + sigmoid(u) + inp
+        # dv/dt = -gamma * v - c^2 * L * u + alpha * sigmoid(u) + inp
         
         du_dt = v
         
@@ -119,6 +138,6 @@ class WaveEquationModel(PDEModel):
         # 非线性项 (可选，模拟神经元激活)
         nonlinear_term = self.sigmoid(u)
         
-        dv_dt = -gamma * v - (c**2) * Lu + nonlinear_term + inp
+        dv_dt = -gamma * v - (c**2) * Lu + alpha * nonlinear_term + inp
         
         return np.concatenate([du_dt, dv_dt])

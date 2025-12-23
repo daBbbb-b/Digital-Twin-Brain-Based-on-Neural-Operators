@@ -55,6 +55,7 @@ class EIModel(ODEModel):
         super().__init__(n_nodes, params)
         
         # 默认参数 (参考 Deco et al. 或 Pang et al.)
+        # 注意：时间单位统一为毫秒 (ms)
         self.default_params = {
             'tau_E': 10.0,   # 兴奋性时间常数 (ms)
             'tau_I': 20.0,   # 抑制性时间常数 (ms)
@@ -83,16 +84,15 @@ class EIModel(ODEModel):
             
     def sigmoid_E(self, x):
         """兴奋性群体的激活函数"""
-        # H(x) = (a*x - b) / (1 - exp(-d*(a*x - b)))
-        # 这是一个常用的非线性传递函数
-        # 为了数值稳定性，可以使用简单的sigmoid: 1 / (1 + exp(-x))
-        # 这里使用简化的sigmoid形式，或者参考Pang et al.的具体公式
-        # 假设使用简单的sigmoid:
-        return 1.0 / (1.0 + np.exp(-x))
+        # 使用数值稳定的 logistic: 避免在 np.exp(-x) 中出现 overflow
+        x = np.asarray(x, dtype=np.float64)
+        # 对于 x >= 0 计算 1/(1+exp(-x))，对于 x < 0 计算 exp(x)/(1+exp(x))，以避免溢出
+        return np.where(x >= 0, 1.0 / (1.0 + np.exp(-x)), np.exp(x) / (1.0 + np.exp(x)))
 
     def sigmoid_I(self, x):
         """抑制性群体的激活函数"""
-        return 1.0 / (1.0 + np.exp(-x))
+        x = np.asarray(x, dtype=np.float64)
+        return np.where(x >= 0, 1.0 / (1.0 + np.exp(-x)), np.exp(x) / (1.0 + np.exp(x)))
 
     def dynamics(self, t: float, state: np.ndarray, stimulus: Optional[np.ndarray] = None) -> np.ndarray:
         """
