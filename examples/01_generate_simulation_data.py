@@ -24,6 +24,8 @@ import pandas as pd
 from pathlib import Path
 import logging
 import pickle
+import scipy.sparse as sp
+from joblib import Parallel, delayed
 
 # 添加父目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -63,14 +65,80 @@ def generate_dummy_ec(n_nodes, seed=42):
     np.fill_diagonal(ec, 0)
     return ec
 
+def generate_ode_ec_sample(n_nodes, dt, duration, ec_matrix, sampling_interval, output_dir, i):
+    """生成单个ODE(EC)样本"""
+    try:
+        ode_sim = ODESimulator(n_nodes=n_nodes, dt=dt, duration=duration, model_type='EI')
+        results = ode_sim.run_simulation(
+            connectivity=ec_matrix,
+            stimulus=None,
+            noise_level=0.02,
+            noise_seed=i,
+            sampling_interval=sampling_interval,
+            n_stim_channels=n_nodes,
+            clip_state=True,
+            state_clip_value=100.0,
+            fail_on_nan=False,
+        )
+        save_path = output_dir / f'ode_ec_ei_sample_{i}.pkl'
+        with open(save_path, 'wb') as f:
+            pickle.dump(results, f)
+        return f"保存ODE(EC)样本 {i} 到 {save_path}"
+    except Exception as e:
+        return f"ODE(EC)样本 {i} 生成失败: {e}"
+
+def generate_ode_sc_sample(n_nodes, dt, duration, sc_matrix, sampling_interval, output_dir, i):
+    """生成单个ODE(SC)样本"""
+    try:
+        ode_sim = ODESimulator(n_nodes=n_nodes, dt=dt, duration=duration, model_type='EI')
+        results = ode_sim.run_simulation(
+            connectivity=sc_matrix,
+            stimulus=None,
+            noise_level=0.02,
+            noise_seed=i + 1000,
+            sampling_interval=sampling_interval,
+            n_stim_channels=n_nodes,
+            clip_state=True,
+            state_clip_value=100.0,
+            fail_on_nan=False,
+        )
+        save_path = output_dir / f'ode_sc_ei_sample_{i}.pkl'
+        with open(save_path, 'wb') as f:
+            pickle.dump(results, f)
+        return f"保存ODE(SC)样本 {i} 到 {save_path}"
+    except Exception as e:
+        return f"ODE(SC)样本 {i} 生成失败: {e}"
+
+def generate_pde_sample(n_nodes, dt, duration, surf_adj, vertices, faces, sampling_interval, output_dir, i):
+    """生成单个PDE样本"""
+    try:
+        pde_sim = PDESimulator(n_nodes=n_nodes, dt=dt, duration=duration, model_type='wave')
+        results = pde_sim.run_simulation(
+            connectivity=surf_adj,
+            vertices=vertices,
+            faces=faces,
+            stimulus=None,
+            noise_level=0.01,
+            noise_seed=i,
+            sampling_interval=sampling_interval
+        )
+        save_path = output_dir / f'pde_surf_sample_{i}.pkl'
+        with open(save_path, 'wb') as f:
+            pickle.dump(results, f)
+        return f"保存PDE(Surface)样本 {i} 到 {save_path}"
+    except Exception as e:
+        import traceback
+        return f"PDE(Surface)样本 {i} 生成失败: {e}\n{traceback.format_exc()}"
+
 def main():
     logger.info("开始生成仿真数据...")
     
     # --- 配置区域 ---
     # 设置为 True 以启用对应的仿真生成，设置为 False 以跳过
     ENABLE_ODE_EC = False   # 基于有效连接(EC)的ODE仿真
-    ENABLE_ODE_SC = True   # 基于结构连接(SC)的ODE仿真
-    ENABLE_PDE_SURF = False # 基于皮层表面的PDE仿真
+    ENABLE_ODE_SC = False   # 基于结构连接(SC)的ODE仿真
+    ENABLE_PDE_SURF = True # 基于皮层表面的PDE仿真
+    N_JOBS = 4  # 并行生成使用的CPU核心数，-1 表示使用所有核心
     # ----------------
 
     # 路径设置
@@ -99,9 +167,9 @@ def main():
     # dt 是 ODE/EI 的离散步长（单位 ms）。
     # Euler 显式积分对步长很敏感：当 dt 相对 tau_E/tau_I 过大时，容易数值发散并触发 overflow/NaN。
     # 经验上建议 dt <= min(tau_E, tau_I) / 5（默认 tau_E=10ms, tau_I=20ms -> dt<=2ms 更稳）
-    dt = 2.0  # ms
-    duration = 100000.0 # ms (Run时长 100s)
-    sampling_interval = 50 # ms (采样/记录间隔)
+    dt = 5.0  # ms
+    duration = 20000.0 # ms (Run时长 20s)
+    sampling_interval = 2000 # ms (采样/记录间隔)
     n_samples = 2000 # 演示用样本数
     n_start = 0 # 样本起始编号
     
@@ -111,65 +179,39 @@ def main():
     logger.info(f"仿真时长 (duration): {duration} s")
     logger.info(f"采样间隔 (sampling_interval): {sampling_interval} s")
     logger.info(f"样本数量 (n_samples): {n_samples}")
+    logger.info(f"并行核心数 (N_JOBS): {N_JOBS}")
     logger.info(f"ODE(EC) 启用: {ENABLE_ODE_EC}")
     logger.info(f"ODE(SC) 启用: {ENABLE_ODE_SC}")
     logger.info(f"PDE(Surf) 启用: {ENABLE_PDE_SURF}")
     logger.info("========================")
     
     # 初始化 ODE 仿真器和刺激生成器 (如果需要)
-    ode_sim = None
-    stim_gen = None
+    # ode_sim = None (并行模式下在子进程初始化)
+    # stim_gen = None
     
     # 4. ODE仿真 (基于EC - EI Model)
     if ENABLE_ODE_EC:
         logger.info("开始ODE仿真 (基于EC, EI Model)...")
-        # 使用 EIModel
-        ode_sim = ODESimulator(n_nodes=n_nodes, dt=dt, duration=duration, model_type='EI')
-        
-        for i in range(n_start,n_start + n_samples):
-            # 自动生成 Task 和 刺激
-            # run_simulation 会自动调用 generate_task_schedule 如果 stimulus 为 None
-            results = ode_sim.run_simulation(
-                connectivity=ec_matrix, 
-                stimulus=None, # 让仿真器自动生成
-                noise_level=0.02, 
-                noise_seed=i,
-                sampling_interval=sampling_interval,
-                n_stim_channels=n_nodes,  # EI模型刺激作用于所有节点
-                clip_state=True,
-                state_clip_value=100.0,
-                fail_on_nan=False,
-            )
-            
-            # 保存结果
-            save_path = output_dir / f'ode_ec_ei_sample_{i}.pkl'
-            with open(save_path, 'wb') as f:
-                pickle.dump(results, f)
-            logger.info(f"保存ODE样本 {i} 到 {save_path}")
+        results = Parallel(n_jobs=N_JOBS)(
+            delayed(generate_ode_ec_sample)(
+                n_nodes, dt, duration, ec_matrix, sampling_interval, output_dir, i
+            ) for i in range(n_start, n_start + n_samples)
+        )
+        for res in results:
+            logger.info(res)
     else:
         logger.info("跳过 ODE仿真 (基于EC)")
         
     # 5. ODE仿真 (基于SC - EI Model)
     if ENABLE_ODE_SC:
         logger.info("开始ODE仿真 (基于SC, EI Model)...")
-        ode_sim = ODESimulator(n_nodes=n_nodes, dt=dt, duration=duration, model_type='EI')
-        for i in range(n_start,n_start + n_samples):
-            results = ode_sim.run_simulation(
-                connectivity=sc_matrix, 
-                stimulus=None,
-                noise_level=0.02,
-                noise_seed=i+1000,
-                sampling_interval=sampling_interval,
-                n_stim_channels=n_nodes,
-                clip_state=True,
-                state_clip_value=100.0,
-                fail_on_nan=False,
-            )
-            
-            save_path = output_dir / f'ode_sc_ei_sample_{i}.pkl'
-            with open(save_path, 'wb') as f:
-                pickle.dump(results, f)
-            logger.info(f"保存ODE(SC)样本 {i} 到 {save_path}")
+        results = Parallel(n_jobs=N_JOBS)(
+            delayed(generate_ode_sc_sample)(
+                n_nodes, dt, duration, sc_matrix, sampling_interval, output_dir, i
+            ) for i in range(n_start, n_start + n_samples)
+        )
+        for res in results:
+            logger.info(res)
     else:
         logger.info("跳过 ODE仿真 (基于SC)")
         
@@ -189,24 +231,18 @@ def main():
                 
                 surf_adj = surface_utils.get_mesh_adjacency(faces, n_vertices)
                 
-                pde_sim = PDESimulator(n_nodes=n_vertices, dt=dt, duration=duration, model_type='wave')
-                
-                for i in range(n_start,n_start + n_samples):
-                    # 传入 vertices 以生成空间刺激
-                    results = pde_sim.run_simulation(
-                        connectivity=surf_adj, 
-                        vertices=vertices,
-                        faces=faces,
-                        stimulus=None, # 自动生成
-                        noise_level=0.01, 
-                        noise_seed=i,
-                        sampling_interval=sampling_interval
-                    )
-                    
-                    save_path = output_dir / f'pde_surf_sample_{i}.pkl'
-                    with open(save_path, 'wb') as f:
-                        pickle.dump(results, f)
-                    logger.info(f"保存PDE(Surface)样本 {i} 到 {save_path}")
+                # 优化：转换为CSR稀疏矩阵以加速 SpMV
+                if not sp.issparse(surf_adj):
+                    surf_adj = sp.csr_matrix(surf_adj)
+                    logger.info("已将Surface邻接矩阵转换为CSR格式")
+
+                results = Parallel(n_jobs=N_JOBS)(
+                    delayed(generate_pde_sample)(
+                        n_vertices, dt, duration, surf_adj, vertices, faces, sampling_interval, output_dir, i
+                    ) for i in range(n_start, n_start + n_samples)
+                )
+                for res in results:
+                    logger.info(res)
                     
             except Exception as e:
                 logger.error(f"Surface PDE仿真失败: {e}")
