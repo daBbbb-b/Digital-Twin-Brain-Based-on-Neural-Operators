@@ -98,7 +98,10 @@ class ODESimulator:
                        noise_seed: Optional[int] = None,
                        initial_state: Optional[np.ndarray] = None,
                        sampling_interval: float = 50.0,
-                       n_stim_channels: int = 5) -> Dict:
+                       n_stim_channels: int = 5,
+                       clip_state: bool = True,
+                       state_clip_value: float = 100.0,
+                       fail_on_nan: bool = False) -> Dict:
         """
         运行单次仿真
         
@@ -210,6 +213,15 @@ class ODESimulator:
             # 按照题目描述，直接加噪声项
             # 假设 noise[i] 已经是 eta(t)
             state = state + (dydt + noise[i]) * self.dt
+
+            # 数值健壮性检查：一旦出现 NaN/Inf，后续会迅速污染整段序列
+            if not np.all(np.isfinite(state)):
+                if fail_on_nan:
+                    raise FloatingPointError(f"Non-finite state encountered at step {i} (t={t}).")
+                state = np.nan_to_num(state, nan=0.0, posinf=state_clip_value, neginf=-state_clip_value)
+
+            if clip_state:
+                state = np.clip(state, -state_clip_value, state_clip_value)
             
             if i % sampling_steps == 0:
                 states.append(state.copy())

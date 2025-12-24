@@ -102,10 +102,24 @@ class WaveEquationModel(PDEModel):
         if self.params['L'] is not None:
             self.laplacian = self.params['L']
             
-    def sigmoid(self, x):
-        """数值稳定的Sigmoid函数"""
+    @staticmethod
+    def _stable_sigmoid(x: np.ndarray, clip: float = 60.0) -> np.ndarray:
+        """
+        数值稳定 sigmoid/logistic：
+        - 对输入裁剪避免 exp 溢出
+        - 分段公式避免极端情况下 overflow/underflow
+        """
         x = np.asarray(x, dtype=np.float64)
-        return np.where(x >= 0, 1.0 / (1.0 + np.exp(-x)), np.exp(x) / (1.0 + np.exp(x)))
+        x = np.clip(x, -clip, clip)
+        return np.where(
+            x >= 0,
+            1.0 / (1.0 + np.exp(-x)),
+            np.exp(x) / (1.0 + np.exp(x)),
+        )
+
+    def sigmoid(self, x):
+        """Sigmoid函数（带数值稳定保护）"""
+        return self._stable_sigmoid(x)
             
     def dynamics(self, t: float, state: np.ndarray, stimulus: Optional[np.ndarray] = None) -> np.ndarray:
         """
@@ -113,8 +127,13 @@ class WaveEquationModel(PDEModel):
         state: [u, v] (2 * n_nodes)
         """
         n = self.n_nodes
+        state = np.asarray(state, dtype=np.float64)
         u = state[:n]
         v = state[n:]
+
+        # 数值保护：避免 u/v 在显式 Euler 积分中发散后进入 sigmoid 触发 exp overflow
+        u = np.clip(u, -60.0, 60.0)
+        v = np.clip(v, -200.0, 200.0)
         
         gamma = self.params['gamma']
         c = self.params['c']
@@ -124,7 +143,7 @@ class WaveEquationModel(PDEModel):
             raise ValueError("Laplacian matrix not set. Call set_laplacian() first.")
             
         # 外部输入
-        inp = stimulus if stimulus is not None else np.zeros(n)
+        inp = stimulus if stimulus is not None else np.zeros(n, dtype=np.float64)
         
         # 波动方程
         # du/dt = v

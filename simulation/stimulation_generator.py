@@ -81,9 +81,21 @@ class StimulationGenerator:
         # sigmoid(x) = 1 / (1 + exp(-x))
         # x goes from -3 to 3 covers most transition
         tau = rise_time / 6.0
-        
-        s1 = 1.0 / (1.0 + np.exp(-(t - t0) / tau))
-        s2 = 1.0 / (1.0 + np.exp(-(t - t1) / tau))
+
+        def stable_sigmoid(x: np.ndarray, clip: float = 60.0) -> np.ndarray:
+            # 数值稳定 sigmoid：先裁剪输入，再用分段公式避免 exp 溢出
+            x = np.asarray(x, dtype=np.float64)
+            x = np.clip(x, -clip, clip)
+            return np.where(
+                x >= 0,
+                1.0 / (1.0 + np.exp(-x)),
+                np.exp(x) / (1.0 + np.exp(x)),
+            )
+
+        x1 = (t - t0) / tau
+        x2 = (t - t1) / tau
+        s1 = stable_sigmoid(x1)
+        s2 = stable_sigmoid(x2)
         
         return s1 * (1.0 - s2)
 
@@ -119,18 +131,22 @@ class StimulationGenerator:
             
             # ODE Params
             # 随机选择 1-3 个通道
-            # 小巧思：ei的n_channels为节点数，可以刺激所有节点,实际上只会选择最多4个节点
-            n_active = np.random.randint(1, min(4, n_channels + 1))
-            active_chs = np.random.choice(n_channels, size=n_active, replace=False).tolist()
-            
-            # 幅度采样: [-2.0, -0.5] U [0.5, 2.0]
-            amps_ode = []
-            for _ in range(n_active):
-                if np.random.rand() > 0.5:
-                    amp = np.random.uniform(0.5, 2.0)
-                else:
-                    amp = np.random.uniform(-2.0, -0.5)
-                amps_ode.append(amp)
+            # 小巧思：EI 的 n_channels 为节点数，可以刺激所有节点，但实际上只会选择最多 3 个节点
+            #
+            # 注意：PDE-only 模式下会传入 n_channels=0（见 pde_simulator.py），此时应跳过 ODE 通道采样。
+            active_chs: List[int] = []
+            amps_ode: List[float] = []
+            if n_channels > 0:
+                n_active = np.random.randint(1, min(4, n_channels + 1))
+                active_chs = np.random.choice(n_channels, size=n_active, replace=False).tolist()
+
+                # 幅度采样: [-2.0, -0.5] U [0.5, 2.0]
+                for _ in range(n_active):
+                    if np.random.rand() > 0.5:
+                        amp = np.random.uniform(0.5, 2.0)
+                    else:
+                        amp = np.random.uniform(-2.0, -0.5)
+                    amps_ode.append(amp)
                 
             # PDE Params
             seeds = []

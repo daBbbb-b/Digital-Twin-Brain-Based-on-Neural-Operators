@@ -72,3 +72,10 @@ htmlcov/
 
 # 文档构建
 docs/_build/
+
+#忽略所有dataset/里面包含simulation_data名字的文件夹
+dataset/simulation_data/
+dataset/simulation_data_1
+dataset/simulation_data_2
+dataset/simulation_data_3
+dataset/simulation_data_4

@@ -66,7 +66,11 @@ class PDESimulator:
                        noise_level: float = 0.01,
                        noise_seed: Optional[int] = None,
                        initial_state: Optional[np.ndarray] = None,
-                       sampling_interval: float = 50.0) -> Dict:
+                       sampling_interval: float = 50.0,
+                       dtype: Union[np.dtype, str] = np.float32,
+                       clip_state: bool = True,
+                       state_clip_value: float = 100.0,
+                       check_finite: bool = True) -> Dict:
         """
         运行单次PDE仿真
         
@@ -87,8 +91,7 @@ class PDESimulator:
         # 设置拉普拉斯矩阵
         self.model.set_laplacian(connectivity)
         
-        if noise_seed is not None:
-            np.random.seed(noise_seed)
+        rng = np.random.default_rng(noise_seed)
             
         # 自动生成刺激 (如果未提供且提供了顶点信息)
         if stimulus is None and vertices is not None:
@@ -104,13 +107,22 @@ class PDESimulator:
         
         if initial_state is None:
             # Wave equation state: [u, v]
-            initial_state = np.zeros(2 * self.n_nodes)
+            initial_state = np.zeros(2 * self.n_nodes, dtype=dtype)
+        else:
+            initial_state = np.asarray(initial_state, dtype=dtype)
             
         # 运行积分
         state = initial_state
         states = [] # 只保存 u (神经活动)
         
         sampling_steps = int(sampling_interval / self.dt)
+        if sampling_steps < 1:
+            sampling_steps = 1
+
+        # 预取常用局部变量，减少循环内属性查找开销
+        dt = self.dt
+        n = self.n_nodes
+        model = self.model
         
         for i in range(self.n_time_steps):
             t = self.time_points[i]
@@ -124,18 +136,47 @@ class PDESimulator:
                     u_t = stimulus[i]
             
             # 生成当前步噪声
-            noise_t = np.random.normal(0, 1, self.n_nodes) * noise_level
+            noise_t = rng.normal(0.0, noise_level, size=n).astype(dtype, copy=False)
             
             # 组合输入
             total_input = noise_t
             if u_t is not None:
-                total_input += u_t
+                total_input = total_input + np.asarray(u_t, dtype=dtype)
                 
-            # 计算导数
-            dydt = self.model.dynamics(t, state, total_input)
-            
-            # Euler step
-            state = state + dydt * self.dt
+            # 计算导数 + Euler step
+            #
+            # 性能优化：WaveEquationModel 的 dynamics() 会创建 (2N,) 新数组（np.concatenate），
+            # 每步分配成本很高。这里提供一个原地更新的 fast path，避免额外大数组分配。
+            if isinstance(model, WaveEquationModel):
+                u = state[:n]
+                v = state[n:]
+
+                gamma = model.params['gamma']
+                c = model.params['c']
+                alpha = model.params.get('alpha', 1.0)
+
+                # Laplacian * u（稀疏 SpMV）
+                Lu = model.laplacian @ u
+
+                # 非线性项（sigmoid 内部已有数值稳定保护）
+                nonlinear_term = model.sigmoid(u)
+
+                du_dt = v
+                dv_dt = -gamma * v - (c**2) * Lu + alpha * nonlinear_term + total_input
+
+                # 原地更新
+                u[:] = u + du_dt * dt
+                v[:] = v + dv_dt * dt
+            else:
+                dydt = model.dynamics(t, state, total_input)
+                state = state + dydt * dt
+
+            if check_finite and (not np.all(np.isfinite(state))):
+                # 避免 NaN/Inf 污染后续整条序列
+                state = np.nan_to_num(state, nan=0.0, posinf=state_clip_value, neginf=-state_clip_value)
+
+            if clip_state:
+                state = np.clip(state, -state_clip_value, state_clip_value)
             
             # 简单的边界限制 (可选)
             # state = np.clip(state, -10, 10)
