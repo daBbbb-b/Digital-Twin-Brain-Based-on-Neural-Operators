@@ -8,53 +8,7 @@ import numpy as np
 project_root = pathlib.Path(__file__).resolve().parents[1]
 sys.path.append(str(project_root))
 from models.fno import FNO1d
-
-def load_data_from_pkl(pkl_path, T=256):
-    try:
-        with open(pkl_path, "rb") as f:
-            data = pickle.load(f)
-        
-        if "x" in data and "u" in data:
-            x = torch.as_tensor(data["x"], dtype=torch.float32)
-            u = torch.as_tensor(data["u"], dtype=torch.float32)
-        elif "bold_signal" in data and "stimulus_config" in data:
-            # 处理真实仿真数据
-            raw_u = data["bold_signal"] # (Time, Channels)
-            if np.isnan(raw_u).any():
-                raw_u = np.nan_to_num(raw_u, nan=0.0)
-            
-            n_time, n_channels = raw_u.shape
-            stimulus_matrix = np.zeros((n_time, n_channels))
-            time_points = data["time_points"]
-            config = data["stimulus_config"]
-            
-            for task in config['tasks']:
-                t_start, t_end = task['range']
-                channels = task['channels']
-                amplitudes = task['amplitudes']
-                mask = (time_points >= t_start) & (time_points <= t_end)
-                for ch, amp in zip(channels, amplitudes):
-                    if ch < n_channels:
-                        stimulus_matrix[mask, ch] += amp
-            
-            x_full = torch.tensor(stimulus_matrix, dtype=torch.float32)
-            u_full = torch.tensor(raw_u, dtype=torch.float32)
-            
-            # 切片成多个样本
-            num_samples = n_time // T
-            if num_samples > 0:
-                x = x_full[:num_samples*T].view(num_samples, T, n_channels)
-                u = u_full[:num_samples*T].view(num_samples, T, n_channels)
-            else:
-                return None, None
-        else:
-            print(f"跳过 {pkl_path}: 未知的数据格式")
-            return None, None
-
-        return x, u
-    except Exception as e:
-        print(f"加载 {pkl_path} 失败: {e}")
-        return None, None
+from data_loader import load_data_from_pkl
 
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

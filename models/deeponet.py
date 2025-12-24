@@ -20,259 +20,194 @@ DeepONet模块
     Lu et al. (2019) "DeepONet: Learning nonlinear operators for identifying 
     differential equations based on the universal approximation theorem of operators"
 """
-
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from typing import Optional, List, Tuple
-from .base_operator import BaseOperator
+import torch.optim as optim
+import numpy as np
+import matplotlib.pyplot as plt
 
+# ==========================================
+# 1. 定义 DeepONet 模型
+# ==========================================
+class DeepONet(nn.Module):
+    def __init__(self, num_sensors, dim_y, num_branch_layers, num_trunk_layers, hidden_size, output_size):
+        super(DeepONet, self).__init__()
+        
+        # Branch Net: 处理输入函数 u (在 m 个传感器点的值)
+        # Input: (Batch, num_sensors) -> Output: (Batch, output_size)
+        branch_layers = []
+        branch_layers.append(nn.Linear(num_sensors, hidden_size))
+        branch_layers.append(nn.Tanh())
+        for _ in range(num_branch_layers - 1):
+            branch_layers.append(nn.Linear(hidden_size, hidden_size))
+            branch_layers.append(nn.Tanh())
+        branch_layers.append(nn.Linear(hidden_size, output_size))
+        self.branch_net = nn.Sequential(*branch_layers)
 
-class BranchNet(nn.Module):
-    """
-    分支网络（Branch Network）
-    
-    功能：
-        - 编码输入函数
-        - 在传感器位置采样输入函数
-        - 输出基函数系数
+        # Trunk Net: 处理查询位置 y
+        # Input: (Batch, dim_y) -> Output: (Batch, output_size)
+        trunk_layers = []
+        trunk_layers.append(nn.Linear(dim_y, hidden_size))
+        trunk_layers.append(nn.Tanh())
+        for _ in range(num_trunk_layers - 1):
+            trunk_layers.append(nn.Linear(hidden_size, hidden_size))
+            trunk_layers.append(nn.Tanh())
+        trunk_layers.append(nn.Linear(hidden_size, output_size))
+        self.trunk_net = nn.Sequential(*trunk_layers)
         
-    输入：
-        - 输入函数在传感器位置的采样值
-        - 形状：(batch, n_sensors, input_dim)
+        # Bias b0
+        self.bias = nn.Parameter(torch.tensor([0.0]))
+
+    def forward(self, u_input, y_input):
+        # u_input shape: [Batch, m]
+        # y_input shape: [Batch, 1] (Assuming 1D output domain)
         
-    输出：
-        - 基函数系数
-        - 形状：(batch, n_basis)
+        B = self.branch_net(u_input) # [Batch, p]
+        T = self.trunk_net(y_input)  # [Batch, p]
         
-    网络结构：
-        全连接网络或CNN
-    """
-    
-    def __init__(self,
-                 input_dim: int,
-                 n_sensors: int,
-                 n_basis: int,
-                 hidden_dims: List[int] = [100, 100, 100]):
-        """
-        初始化分支网络
+        # 输出是点积: sum(B * T) + bias
+        # dim=1 表示在特征维度 p 上求和
+        output = torch.sum(B * T, dim=1, keepdim=True) + self.bias
+        return output
+
+# ==========================================
+# 2. 数据生成器 (Antiderivative Operator)
+#    学习 G: u(x) -> s(x) = int_0^x u(t) dt
+# ==========================================
+class DataGenerator:
+    def __init__(self, m_sensors):
+        self.m = m_sensors
+        self.sensor_points = np.linspace(0, 1, m_sensors) # 固定的传感器位置
         
-        参数：
-            input_dim (int): 输入维度（每个传感器的特征维度）
-            n_sensors (int): 传感器数量
-            n_basis (int): 基函数数量
-            hidden_dims (List[int]): 隐藏层维度列表
-        """
-        super().__init__()
-        pass
-    
-    def forward(self, u: torch.Tensor) -> torch.Tensor:
-        """
-        前向传播
+    def generate_data(self, num_samples):
+        # 我们使用 Chebyshev 多项式或简单的 Sin/Cos 组合来生成随机函数 u(x)
+        # 这里为了简单清晰，生成 u(x) = a*sin(k*x) + b*cos(k*x)
+        # 对应的积分 s(x) = -a/k * cos(k*x) + b/k * sin(k*x) + C
+        # 使得 s(0) = 0 => C = a/k
         
-        参数：
-            u (torch.Tensor): 输入函数采样 (batch, n_sensors, input_dim)
+        u_data = []
+        y_data = []
+        s_data = []
+        
+        for _ in range(num_samples):
+            # 随机参数
+            a = np.random.uniform(-1, 1)
+            b = np.random.uniform(-1, 1)
+            k = np.random.randint(1, 5) * np.pi 
             
-        返回：
-            torch.Tensor: 基函数系数 (batch, n_basis)
-        """
-        pass
-
-
-class TrunkNet(nn.Module):
-    """
-    主干网络（Trunk Network）
-    
-    功能：
-        - 编码输出位置坐标
-        - 生成基函数值
-        
-    输入：
-        - 输出位置坐标
-        - 形状：(batch, n_points, coord_dim)
-        
-    输出：
-        - 基函数值
-        - 形状：(batch, n_points, n_basis)
-        
-    网络结构：
-        全连接网络
-    """
-    
-    def __init__(self,
-                 coord_dim: int,
-                 n_basis: int,
-                 hidden_dims: List[int] = [100, 100, 100]):
-        """
-        初始化主干网络
-        
-        参数：
-            coord_dim (int): 坐标维度（如时间为1D，时空为2D）
-            n_basis (int): 基函数数量
-            hidden_dims (List[int]): 隐藏层维度列表
-        """
-        super().__init__()
-        pass
-    
-    def forward(self, y: torch.Tensor) -> torch.Tensor:
-        """
-        前向传播
-        
-        参数：
-            y (torch.Tensor): 输出位置坐标 (batch, n_points, coord_dim)
+            # 1. 在传感器位置对 u 采样 (Branch Net Input)
+            u_sensors = a * np.sin(k * self.sensor_points) + b * np.cos(k * self.sensor_points)
             
-        返回：
-            torch.Tensor: 基函数值 (batch, n_points, n_basis)
-        """
-        pass
-
-
-class DeepONet(BaseOperator):
-    """
-    Deep Operator Network
-    
-    功能：
-        - 学习从输入函数到输出函数的非线性算子映射
-        - 基于泛函逼近定理
-        
-    核心思想：
-        G[u](y) = ∑_{k=1}^{p} b_k(u) * t_k(y)
-        
-        其中：
-        - u: 输入函数（如连接矩阵）
-        - y: 输出位置（如时间点、空间点）
-        - b_k: 分支网络输出的系数
-        - t_k: 主干网络输出的基函数
-        
-    在本项目中的应用：
-        - 输入函数 u: 连接矩阵 C(i,j)
-        - 输出位置 y: (时间 t, 节点 i)
-        - 输出 G[u](y): 刺激函数 s(t, i)
-        
-    属性：
-        branch_net: 分支网络
-        trunk_net: 主干网络
-        n_basis: 基函数数量
-    """
-    
-    def __init__(self,
-                 input_dim: int,
-                 coord_dim: int,
-                 n_sensors: int,
-                 n_basis: int = 100,
-                 branch_hidden_dims: List[int] = [100, 100, 100],
-                 trunk_hidden_dims: List[int] = [100, 100, 100],
-                 output_dim: int = 1):
-        """
-        初始化DeepONet
-        
-        参数：
-            input_dim (int): 输入函数维度
-            coord_dim (int): 坐标维度
-            n_sensors (int): 传感器数量（输入函数采样点数）
-            n_basis (int): 基函数数量（决定模型容量）
-            branch_hidden_dims (List[int]): 分支网络隐藏层
-            trunk_hidden_dims (List[int]): 主干网络隐藏层
-            output_dim (int): 输出维度
-        """
-        super().__init__(input_dim * n_sensors, output_dim, n_basis)
-        pass
-    
-    def forward(self, 
-               u: torch.Tensor, 
-               y: torch.Tensor) -> torch.Tensor:
-        """
-        前向传播
-        
-        参数：
-            u (torch.Tensor): 输入函数采样
-                形状：(batch, n_sensors, input_dim)
-                例如：连接矩阵在特定位置的采样
+            # 2. 随机采样一些 y 点作为查询点 (Trunk Net Input)
+            # 每个 u 生成 10 个 y 测试点
+            y_points = np.random.uniform(0, 1, 10)
+            
+            # 3. 计算真实解 s(y) (Label)
+            constant_C = a / k
+            s_targets = - (a/k) * np.cos(k * y_points) + (b/k) * np.sin(k * y_points) + constant_C
+            
+            for y, s in zip(y_points, s_targets):
+                u_data.append(u_sensors)
+                y_data.append([y])
+                s_data.append([s])
                 
-            y (torch.Tensor): 输出位置坐标
-                形状：(batch, n_points, coord_dim)
-                例如：(时间, 节点索引)
-                
-        返回：
-            torch.Tensor: 输出函数值
-                形状：(batch, n_points, output_dim)
-                例如：刺激函数 s(t, i)
-        """
-        pass
-    
-    def compute_basis_inner_product(self,
-                                   branch_output: torch.Tensor,
-                                   trunk_output: torch.Tensor) -> torch.Tensor:
-        """
-        计算基函数内积
-        
-        G[u](y) = <b(u), t(y)> = ∑_k b_k(u) * t_k(y)
-        
-        参数：
-            branch_output (torch.Tensor): 分支网络输出 (batch, n_basis)
-            trunk_output (torch.Tensor): 主干网络输出 (batch, n_points, n_basis)
-            
-        返回：
-            torch.Tensor: 输出 (batch, n_points, output_dim)
-        """
-        pass
-    
-    def sensor_locations(self, 
-                        connectivity_matrix: torch.Tensor,
-                        n_sensors: int,
-                        sampling_strategy: str = 'uniform') -> torch.Tensor:
-        """
-        确定传感器位置（从连接矩阵中采样）
-        
-        参数：
-            connectivity_matrix (torch.Tensor): 连接矩阵 (n_nodes, n_nodes)
-            n_sensors (int): 传感器数量
-            sampling_strategy (str): 采样策略
-                - 'uniform': 均匀采样
-                - 'random': 随机采样
-                - 'importance': 重要性采样（基于连接强度）
-                
-        返回：
-            torch.Tensor: 传感器位置索引
-        """
-        pass
+        return np.array(u_data, dtype=np.float32), \
+               np.array(y_data, dtype=np.float32), \
+               np.array(s_data, dtype=np.float32)
 
+# ==========================================
+# 3. 训练流程
+# ==========================================
+def train():
+    # 参数设置
+    M_SENSORS = 100   # 论文中使用 100 个传感器点
+    P_OUTPUT = 40     # Branch/Trunk 输出特征维度 (p)
+    HIDDEN_SIZE = 40  # 隐藏层宽
+    LR = 0.001
+    EPOCHS = 2000
+    NUM_TRAIN_SAMPLES = 1000 # 生成 1000 个不同的函数 u
+    
+    # 准备数据
+    gen = DataGenerator(M_SENSORS)
+    u_train, y_train, s_train = gen.generate_data(NUM_TRAIN_SAMPLES)
+    
+    # 转为 Tensor
+    u_train = torch.from_numpy(u_train)
+    y_train = torch.from_numpy(y_train)
+    s_train = torch.from_numpy(s_train)
+    
+    # 初始化模型
+    model = DeepONet(num_sensors=M_SENSORS, dim_y=1, 
+                     num_branch_layers=2, num_trunk_layers=2, 
+                     hidden_size=HIDDEN_SIZE, output_size=P_OUTPUT)
+    
+    optimizer = optim.Adam(model.parameters(), lr=LR)
+    loss_fn = nn.MSELoss()
+    
+    print("开始训练 DeepONet...")
+    for epoch in range(EPOCHS):
+        model.train()
+        optimizer.zero_grad()
+        
+        # Forward
+        predictions = model(u_train, y_train)
+        
+        # Loss
+        loss = loss_fn(predictions, s_train)
+        
+        # Backward
+        loss.backward()
+        optimizer.step()
+        
+        if (epoch+1) % 200 == 0:
+            print(f"Epoch [{epoch+1}/{EPOCHS}], Loss: {loss.item():.6f}")
 
-class ModifiedDeepONet(DeepONet):
-    """
-    改进的DeepONet
+    return model, gen
+
+# ==========================================
+# 4. 测试与可视化
+# ==========================================
+def test(model, gen):
+    model.eval()
     
-    功能：
-        - 添加残差连接
-        - 添加注意力机制
-        - 改进基函数表示
-        
-    改进点：
-        1. 分支网络和主干网络之间的交叉注意力
-        2. 多头注意力机制
-        3. 残差连接提升训练稳定性
-    """
+    # 生成一个新的测试样本 u_test(x) = sin(2*pi*x)
+    # 真实解 s_test(x) = (1 - cos(2*pi*x)) / (2*pi)
+    x_grid = np.linspace(0, 1, 100)
     
-    def __init__(self, *args, use_attention: bool = True, **kwargs):
-        """
-        初始化改进的DeepONet
-        
-        参数：
-            *args, **kwargs: 传递给DeepONet的参数
-            use_attention (bool): 是否使用注意力机制
-        """
-        super().__init__(*args, **kwargs)
-        pass
+    # 构造 Branch Input
+    # u(x) = sin(2*pi*x)
+    u_test_vals = np.sin(2 * np.pi * gen.sensor_points)
+    u_input = torch.tensor(u_test_vals, dtype=torch.float32).unsqueeze(0) # [1, m]
+    # 需要重复 batch 次，以此来查询 grid 上的每个点
+    u_input = u_input.repeat(len(x_grid), 1) # [100, m]
     
-    def forward(self, u: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """
-        前向传播（包含注意力机制）
+    # 构造 Trunk Input
+    y_input = torch.tensor(x_grid.reshape(-1, 1), dtype=torch.float32) # [100, 1]
+    
+    # 预测
+    with torch.no_grad():
+        s_pred = model(u_input, y_input).numpy()
         
-        参数：
-            u (torch.Tensor): 输入函数
-            y (torch.Tensor): 输出位置
-            
-        返回：
-            torch.Tensor: 输出函数值
-        """
-        pass
+    # 真实值
+    s_true = (1 - np.cos(2 * np.pi * x_grid)) / (2 * np.pi)
+    
+    # 绘图
+    plt.figure(figsize=(10, 5))
+    
+    plt.subplot(1, 2, 1)
+    plt.plot(gen.sensor_points, u_test_vals, 'k--', label='Input u(x)')
+    plt.title("Input Function u(x)")
+    plt.legend()
+    
+    plt.subplot(1, 2, 2)
+    plt.plot(x_grid, s_true, 'b-', label='Exact s(x)')
+    plt.plot(x_grid, s_pred, 'r--', label='DeepONet Prediction')
+    plt.title("Output Function s(x)")
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    trained_model, generator = train()
+    test(trained_model, generator)
