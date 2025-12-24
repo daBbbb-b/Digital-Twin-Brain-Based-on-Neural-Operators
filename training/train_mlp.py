@@ -16,7 +16,7 @@ def train_mlp():
     T = 512              # 时间步长，需与数据切分一致
     batch_size = 16
     lr = 1e-3
-    epochs = 50
+    epochs = 40
 
     # 加载数据
     data_dir = os.path.join(project_root, "dataset", "simulation_data")
