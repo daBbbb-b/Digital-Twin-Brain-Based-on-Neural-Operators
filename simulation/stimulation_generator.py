@@ -81,9 +81,21 @@ class StimulationGenerator:
         # sigmoid(x) = 1 / (1 + exp(-x))
         # x goes from -3 to 3 covers most transition
         tau = rise_time / 6.0
-        
-        s1 = 1.0 / (1.0 + np.exp(-(t - t0) / tau))
-        s2 = 1.0 / (1.0 + np.exp(-(t - t1) / tau))
+
+        def stable_sigmoid(x: np.ndarray, clip: float = 60.0) -> np.ndarray:
+            # 数值稳定 sigmoid：先裁剪输入，再用分段公式避免 exp 溢出
+            x = np.asarray(x, dtype=np.float64)
+            x = np.clip(x, -clip, clip)
+            return np.where(
+                x >= 0,
+                1.0 / (1.0 + np.exp(-x)),
+                np.exp(x) / (1.0 + np.exp(x)),
+            )
+
+        x1 = (t - t0) / tau
+        x2 = (t - t1) / tau
+        s1 = stable_sigmoid(x1)
+        s2 = stable_sigmoid(x2)
         
         return s1 * (1.0 - s2)
 

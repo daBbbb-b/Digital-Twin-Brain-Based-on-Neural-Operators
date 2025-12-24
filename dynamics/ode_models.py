@@ -82,17 +82,28 @@ class EIModel(ODEModel):
         if self.params['C'] is None:
             self.params['C'] = np.zeros((n_nodes, n_nodes))
             
+    @staticmethod
+    def _stable_sigmoid(x: np.ndarray, clip: float = 60.0) -> np.ndarray:
+        """
+        数值稳定的 sigmoid/logistic。
+        - 先对输入裁剪，避免 exp 溢出
+        - 再用分段公式避免极端情况下的 overflow/underflow
+        """
+        x = np.asarray(x, dtype=np.float64)
+        x = np.clip(x, -clip, clip)
+        return np.where(
+            x >= 0,
+            1.0 / (1.0 + np.exp(-x)),
+            np.exp(x) / (1.0 + np.exp(x)),
+        )
+
     def sigmoid_E(self, x):
         """兴奋性群体的激活函数"""
-        # 使用数值稳定的 logistic: 避免在 np.exp(-x) 中出现 overflow
-        x = np.asarray(x, dtype=np.float64)
-        # 对于 x >= 0 计算 1/(1+exp(-x))，对于 x < 0 计算 exp(x)/(1+exp(x))，以避免溢出
-        return np.where(x >= 0, 1.0 / (1.0 + np.exp(-x)), np.exp(x) / (1.0 + np.exp(x)))
+        return self._stable_sigmoid(x)
 
     def sigmoid_I(self, x):
         """抑制性群体的激活函数"""
-        x = np.asarray(x, dtype=np.float64)
-        return np.where(x >= 0, 1.0 / (1.0 + np.exp(-x)), np.exp(x) / (1.0 + np.exp(x)))
+        return self._stable_sigmoid(x)
 
     def dynamics(self, t: float, state: np.ndarray, stimulus: Optional[np.ndarray] = None) -> np.ndarray:
         """
@@ -105,8 +116,14 @@ class EIModel(ODEModel):
         stimulus: 形状为 (n_nodes,)，仅作用于E群体（通常假设）
         """
         n = self.n_nodes
+        state = np.asarray(state, dtype=np.float64)
         E = state[:n]
         I = state[n:]
+
+        # 防止状态在 Euler 积分中数值发散（过大将导致 matmul/exp 溢出并产生 NaN/Inf）
+        # 这些范围是“数值保护栏”，可按数据分布需求调整
+        E = np.clip(E, -50.0, 50.0)
+        I = np.clip(I, -50.0, 50.0)
         
         # 获取参数
         tau_E = self.params['tau_E']
@@ -119,7 +136,7 @@ class EIModel(ODEModel):
         C = self.params['C'] # 连接矩阵
         
         # 外部输入
-        u = stimulus if stimulus is not None else np.zeros(n)
+        u = stimulus if stimulus is not None else np.zeros(n, dtype=np.float64)
         
         # 计算输入电流
         # E群体的输入: 自兴奋 + 长程兴奋(来自其他节点的E) - 局部抑制 + 外部刺激
@@ -129,10 +146,18 @@ class EIModel(ODEModel):
         
         # I群体的输入: 局部兴奋 - 自抑制
         input_I = w_IE * E - w_II * I + u
+
+        # 对输入做裁剪，避免极端耦合/噪声导致 sigmoid 输入过大
+        input_E = np.clip(input_E, -60.0, 60.0)
+        input_I = np.clip(input_I, -60.0, 60.0)
         
         # 计算导数
         dE_dt = (-E + self.sigmoid_E(input_E)) / tau_E
         dI_dt = (-I + self.sigmoid_I(input_I)) / tau_I
+
+        # 再次保护导数范围，避免单步更新过大
+        dE_dt = np.clip(dE_dt, -50.0, 50.0)
+        dI_dt = np.clip(dI_dt, -50.0, 50.0)
         
         return np.concatenate([dE_dt, dI_dt])
 

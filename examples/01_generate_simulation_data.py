@@ -96,8 +96,11 @@ def main():
     logger.info("生成虚拟EC矩阵")
     
     # 3. 仿真参数 (根据 Prompt 要求调整)
-    dt = 1.0 # ms (物理仿真步长，建议 <= 1ms 以保证 PDE 稳定性)
-    duration = 200000.0 # ms (Run时长 200s)
+    # dt 是 ODE/EI 的离散步长（单位 ms）。
+    # Euler 显式积分对步长很敏感：当 dt 相对 tau_E/tau_I 过大时，容易数值发散并触发 overflow/NaN。
+    # 经验上建议 dt <= min(tau_E, tau_I) / 5（默认 tau_E=10ms, tau_I=20ms -> dt<=2ms 更稳）
+    dt = 2.0  # ms
+    duration = 100000.0 # ms (Run时长 100s)
     sampling_interval = 50 # ms (采样/记录间隔)
     n_samples = 2000 # 演示用样本数
     n_start = 0 # 样本起始编号
@@ -132,7 +135,10 @@ def main():
                 noise_level=0.02, 
                 noise_seed=i,
                 sampling_interval=sampling_interval,
-                n_stim_channels=n_nodes # EI模型刺激作用于所有节点
+                n_stim_channels=n_nodes,  # EI模型刺激作用于所有节点
+                clip_state=True,
+                state_clip_value=100.0,
+                fail_on_nan=False,
             )
             
             # 保存结果
@@ -154,7 +160,10 @@ def main():
                 noise_level=0.02,
                 noise_seed=i+1000,
                 sampling_interval=sampling_interval,
-                n_stim_channels=n_nodes
+                n_stim_channels=n_nodes,
+                clip_state=True,
+                state_clip_value=100.0,
+                fail_on_nan=False,
             )
             
             save_path = output_dir / f'ode_sc_ei_sample_{i}.pkl'
