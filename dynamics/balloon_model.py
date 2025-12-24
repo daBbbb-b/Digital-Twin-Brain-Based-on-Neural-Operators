@@ -139,9 +139,15 @@ class BalloonModel:
         
         # 欧拉积分循环
         # 为了稳定性，内部积分步长设为 10ms (0.01s) 或更小
-        internal_dt_s = 0.01 
-        if dt_s < internal_dt_s:
+        # 但是，如果 dt_s 很大（例如 > 0.5s），我们可以适当增大 internal_dt_s 以提高效率
+        # 因为 Balloon 模型的时间常数 tau ~ 0.98s，步长 0.05s 仍然足够稳定
+        if dt_s <= 0.01:
             internal_dt_s = dt_s
+        elif dt_s <= 0.1:
+            internal_dt_s = 0.01
+        else:
+            # 对于更大的 dt_s，使用自适应步长，但不超过 dt_s/10 或 0.05s
+            internal_dt_s = min(dt_s / 10.0, 0.05)
             
         steps_per_sample = int(np.ceil(dt_s / internal_dt_s))
         real_dt_s = dt_s / steps_per_sample # 实际积分步长 (s)

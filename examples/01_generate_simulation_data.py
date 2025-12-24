@@ -136,9 +136,9 @@ def main():
     # --- 配置区域 ---
     # 设置为 True 以启用对应的仿真生成，设置为 False 以跳过
     ENABLE_ODE_EC = False   # 基于有效连接(EC)的ODE仿真
-    ENABLE_ODE_SC = False   # 基于结构连接(SC)的ODE仿真
-    ENABLE_PDE_SURF = True # 基于皮层表面的PDE仿真
-    N_JOBS = 4  # 并行生成使用的CPU核心数，-1 表示使用所有核心
+    ENABLE_ODE_SC = True # 基于结构连接(SC)的ODE仿真
+    ENABLE_PDE_SURF = False # 基于皮层表面的PDE仿真
+    N_JOBS = 1  # 并行生成使用的CPU核心数，-1 表示使用所有核心
     # ----------------
 
     # 路径设置
@@ -167,9 +167,9 @@ def main():
     # dt 是 ODE/EI 的离散步长（单位 ms）。
     # Euler 显式积分对步长很敏感：当 dt 相对 tau_E/tau_I 过大时，容易数值发散并触发 overflow/NaN。
     # 经验上建议 dt <= min(tau_E, tau_I) / 5（默认 tau_E=10ms, tau_I=20ms -> dt<=2ms 更稳）
-    dt = 5.0  # ms
-    duration = 20000.0 # ms (Run时长 20s)
-    sampling_interval = 2000 # ms (采样/记录间隔)
+    dt = 2.0  # ms
+    duration = 200000.0 # ms (Run时长 20s)
+    sampling_interval = 50 # ms (采样/记录间隔)
     n_samples = 2000 # 演示用样本数
     n_start = 0 # 样本起始编号
     
