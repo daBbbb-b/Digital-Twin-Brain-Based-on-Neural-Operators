@@ -7,7 +7,8 @@
 - 其他神经算子变体
 """
 
-from .base_operator import BaseOperator
+from .mlp import MLP
+from .deeponet import DeepONet
 from .fno import FNO1d, FNO2d
 
-__all__ = ['BaseOperator', 'FNO1d', 'FNO2d']
+__all__ = ['MLP', 'DeepONet', 'FNO1d', 'FNO2d']
