@@ -77,9 +77,17 @@ def generate_ode_ec_sample(n_nodes, dt, duration, ec_matrix, sampling_interval, 
             sampling_interval=sampling_interval,
             n_stim_channels=n_nodes,
             clip_state=True,
-            state_clip_value=100.0,
+            state_clip_value=1.0,
             fail_on_nan=False,
         )
+        
+        # 提取刺激数据 (T_sim, N_nodes)
+        # 注意：run_simulation 返回的 results['stimulus_config'] 是配置，
+        # 我们需要访问 ODESimulator 内部生成的实际刺激，或者在 run_simulation 中返回它。
+        # 查看 ode_simulator.py，它目前没有直接返回完整的 stimulus 数组 (为了节省空间?)
+        # 但我们现在需要它。我们需要修改 ode_simulator.py 来返回 stimulus 数组。
+        
+        # 暂时我们先保存结果，稍后修改 ode_simulator.py
         save_path = output_dir / f'ode_ec_ei_sample_{i}.pkl'
         with open(save_path, 'wb') as f:
             pickle.dump(results, f)
@@ -90,18 +98,29 @@ def generate_ode_ec_sample(n_nodes, dt, duration, ec_matrix, sampling_interval, 
 def generate_ode_sc_sample(n_nodes, dt, duration, sc_matrix, sampling_interval, output_dir, i):
     """生成单个ODE(SC)样本"""
     try:
-        ode_sim = ODESimulator(n_nodes=n_nodes, dt=dt, duration=duration, model_type='EI')
+        # 可选择 EI 或 bilinear 模型
+        # EI 模型：直接模拟 E-I 神经群体动力学
+        # bilinear 模型：DCM 风格的双线性控制模型
+        # 两种模型现在都使用相同的刺激通道数（n_nodes），刺激生成逻辑完全通用
+        use_bilinear = False  # 改为 False 以使用 EI 模型
+        
+        if use_bilinear:
+            ode_sim = ODESimulator(n_nodes=n_nodes, dt=dt, duration=duration, model_type='bilinear')
+        else:
+            ode_sim = ODESimulator(n_nodes=n_nodes, dt=dt, duration=duration, model_type='EI')
+
         results = ode_sim.run_simulation(
             connectivity=sc_matrix,
             stimulus=None,
             noise_level=0.02,
             noise_seed=i + 1000,
             sampling_interval=sampling_interval,
-            n_stim_channels=n_nodes,
+            n_stim_channels=n_nodes,  # 统一使用 n_nodes 作为刺激通道数
             clip_state=True,
-            state_clip_value=100.0,
+            state_clip_value=1.0,
             fail_on_nan=False,
         )
+        
         save_path = output_dir / f'ode_sc_ei_sample_{i}.pkl'
         with open(save_path, 'wb') as f:
             pickle.dump(results, f)
@@ -159,25 +178,34 @@ def main():
     n_nodes = sc_matrix.shape[0]
     logger.info(f"加载SC矩阵，大小: {sc_matrix.shape}")
     
+    # 归一化SC矩阵
+    # 原始SC通常是二值或计数，直接使用会导致ODE输入过大并饱和
+    # 这里按行归一化（使每个节点接收的总输入权重最大为1）或谱归一化
+    row_sums = np.sum(sc_matrix, axis=1)
+    max_row_sum = np.max(row_sums)
+    if max_row_sum > 0:
+        sc_matrix = sc_matrix / max_row_sum
+        logger.info(f"SC矩阵已按最大行和 ({max_row_sum:.2f}) 归一化")
+    
     # 2. 生成EC矩阵 (模拟刘泉影的方法)
     ec_matrix = generate_dummy_ec(n_nodes, seed=42)
     logger.info("生成虚拟EC矩阵")
     
     # 3. 仿真参数 (根据 Prompt 要求调整)
     # dt 是 ODE/EI 的离散步长（单位 ms）。
-    # Euler 显式积分对步长很敏感：当 dt 相对 tau_E/tau_I 过大时，容易数值发散并触发 overflow/NaN。
-    # 经验上建议 dt <= min(tau_E, tau_I) / 5（默认 tau_E=10ms, tau_I=20ms -> dt<=2ms 更稳）
-    dt = 2.0  # ms
-    duration = 200000.0 # ms (Run时长 20s)
+    # BEI 模型 (Deco et al.) 通常需要 dt=0.1ms 左右以保证精度 (tau_I=10ms)
+    # 但为了效率，如果使用 Euler，建议 <= 1.0 ms
+    dt = 0.5  # ms (提高精度)
+    duration = 51200.0 # ms (Run时长 51.2s)
     sampling_interval = 50 # ms (采样/记录间隔)
-    n_samples = 2000 # 演示用样本数
+    n_samples = 1000 # 演示用样本数
     n_start = 0 # 样本起始编号
     
     # 记录关键超参数
     logger.info("=== 仿真超参数配置 ===")
-    logger.info(f"时间步长 (dt): {dt} s")
-    logger.info(f"仿真时长 (duration): {duration} s")
-    logger.info(f"采样间隔 (sampling_interval): {sampling_interval} s")
+    logger.info(f"时间步长 (dt): {dt} ms")
+    logger.info(f"仿真时长 (duration): {duration} ms")
+    logger.info(f"采样间隔 (sampling_interval): {sampling_interval} ms")
     logger.info(f"样本数量 (n_samples): {n_samples}")
     logger.info(f"并行核心数 (N_JOBS): {N_JOBS}")
     logger.info(f"ODE(EC) 启用: {ENABLE_ODE_EC}")

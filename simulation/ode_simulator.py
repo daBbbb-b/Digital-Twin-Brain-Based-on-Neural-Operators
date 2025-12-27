@@ -45,8 +45,8 @@ class ODESimulator:
         self.n_nodes = n_nodes
         self.dt = dt
         self.duration = duration
-        self.time_points = np.arange(0, duration, dt)
-        self.n_time_steps = len(self.time_points)
+        self.time_points = np.arange(0, duration, dt) #时间点数组，单位: ms
+        self.n_time_steps = len(self.time_points) #时间步数
         self.model_type = model_type
         
         # 初始化模型
@@ -63,32 +63,65 @@ class ODESimulator:
         # 初始化刺激生成器 (单位: ms)
         self.stim_generator = StimulationGenerator(n_nodes, dt, duration)
         
-    def _generate_bilinear_matrices(self, n_channels: int) -> Tuple[np.ndarray, np.ndarray]:
+    def _generate_bilinear_matrices(self, n_channels: int) -> Tuple[Union[np.ndarray, List], np.ndarray]:
         """
         生成双线性控制模型的 B 和 C 矩阵
         
-        B: (K, N, N) 稀疏随机，非零值 [-0.3, 0.3]
-        C: (N, K) 稀疏，每列 1-2 个非零值，值 [0.5, 1.5]
+        当 n_channels == n_nodes 时（与 EI 模型刺激通道数一致）：
+        - B: 使用稀疏矩阵列表 [scipy.sparse.csr_matrix] * K，极大加速计算
+        - C: (N, N) 对角矩阵，表示刺激直接输入到对应脑区
+        
+        当 n_channels < n_nodes 时（少量控制通道）：
+        - B: (K, N, N) 稀疏随机
+        - C: (N, K) 稀疏，每个通道作用于少数脑区
         """
-        # 生成 B
-        B = np.zeros((n_channels, self.n_nodes, self.n_nodes))
-        for k in range(n_channels):
-            # 稀疏随机连接
-            # 假设每个通道调制约 5% 的连接
-            mask = np.random.rand(self.n_nodes, self.n_nodes) < 0.05
-            values = np.random.uniform(-0.3, 0.3, (self.n_nodes, self.n_nodes))
-            B[k] = values * mask
+        import scipy.sparse as sp
+        
+        # 简化：当通道数等于节点数时，使用对角驱动矩阵
+        if n_channels == self.n_nodes:
+            # 关键优化：使用稀疏矩阵列表而非密集 3D 数组
+            # B: 每个脑区的刺激可以调制局部连接（非常稀疏，约 1%）
+            B_list = []
+            sparsity = 0.01  # 1% 非零
+            for k in range(n_channels):
+                # 生成稀疏随机矩阵
+                nnz = int(self.n_nodes * self.n_nodes * sparsity)
+                row_idx = np.random.randint(0, self.n_nodes, nnz)
+                col_idx = np.random.randint(0, self.n_nodes, nnz)
+                values = np.random.uniform(-0.1, 0.1, nnz)
+                
+                # 使用 CSR 格式（行压缩，矩阵-向量乘法最快）
+                B_k = sp.csr_matrix((values, (row_idx, col_idx)), 
+                                    shape=(self.n_nodes, self.n_nodes),
+                                    dtype=np.float64)
+                B_list.append(B_k)
             
-        # 生成 C
-        C = np.zeros((self.n_nodes, n_channels))
-        for k in range(n_channels):
-            # 每个通道作用于 1-2 个脑区
-            n_targets = np.random.randint(1, 3)
-            targets = np.random.choice(self.n_nodes, size=n_targets, replace=False)
-            values = np.random.uniform(0.5, 1.5, n_targets)
-            C[targets, k] = values
+            # C: 对角矩阵，刺激直接输入到对应脑区
+            # 权重随机化以模拟不同脑区的刺激敏感度
+            C = np.diag(np.random.uniform(0.5, 1.5, self.n_nodes))
             
-        return B, C
+            return B_list, C
+        else:
+            # 原有的少通道逻辑（保持密集数组，因为 K 很小）
+            # 生成 B
+            B = np.zeros((n_channels, self.n_nodes, self.n_nodes))
+            for k in range(n_channels):
+                # 稀疏随机连接
+                # 假设每个通道调制约 5% 的连接
+                mask = np.random.rand(self.n_nodes, self.n_nodes) < 0.05
+                values = np.random.uniform(-0.3, 0.3, (self.n_nodes, self.n_nodes))
+                B[k] = values * mask
+                
+            # 生成 C
+            C = np.zeros((self.n_nodes, n_channels))
+            for k in range(n_channels):
+                # 每个通道作用于 1-2 个脑区
+                n_targets = np.random.randint(1, 3)
+                targets = np.random.choice(self.n_nodes, size=n_targets, replace=False)
+                values = np.random.uniform(0.5, 1.5, n_targets)
+                C[targets, k] = values
+            
+            return B, C
 
     def run_simulation(self, 
                        connectivity: np.ndarray, 
@@ -100,7 +133,7 @@ class ODESimulator:
                        sampling_interval: float = 50.0,
                        n_stim_channels: int = 5,
                        clip_state: bool = True,
-                       state_clip_value: float = 100.0,
+                       state_clip_value: float = 1.0,
                        fail_on_nan: bool = False) -> Dict:
         """
         运行单次仿真
@@ -114,6 +147,9 @@ class ODESimulator:
             initial_state: 初始状态
             sampling_interval: 采样时间间隔 (ms)
             n_stim_channels: 刺激通道数 (仅用于 bilinear 模型且未提供 stimulus 时)
+            clip_state: 是否裁剪状态变量 (防止数值发散)
+            state_clip_value: 裁剪阈值 (默认1.0，因为 BEI 模型变量 S_E/S_I 是门控变量，范围 [0, 1])
+            fail_on_nan: 遇到 NaN 时是否报错
             
         返回:
             results: 包含神经活动、BOLD信号等的字典
@@ -136,23 +172,14 @@ class ODESimulator:
         
         # 自动生成刺激 (如果未提供)
         if stimulus is None:
-            if self.model_type == 'bilinear':
-                # 使用 TaskSchedule 生成刺激
-                tasks = self.stim_generator.generate_task_schedule(n_channels=n_stim_channels)
-                stimulus, stimulus_config = self.stim_generator.generate_ode_stimulus(tasks, n_stim_channels)
-            elif self.model_type == 'EI':
-                # EI模型通常直接作用于节点，这里我们假设刺激直接作用于节点
-                # 为了兼容 TaskSchedule，我们可以将 n_channels 设为 n_nodes
-                # 或者随机选择一些节点作为刺激目标
-                # 这里简单起见，我们随机选择一些节点进行刺激
-                tasks = self.stim_generator.generate_task_schedule(n_channels=self.n_nodes)
-                # 注意：generate_ode_stimulus 返回的是 (T, K)，如果 K=N，则直接是 (T, N)
-                stimulus, stimulus_config = self.stim_generator.generate_ode_stimulus(tasks, self.n_nodes)
-            else:
-                # 默认 EI 刺激生成 (保持兼容性)
-                # 这里可以保留旧逻辑或抛出警告
-                print("Warning: Stimulus not provided and model type unknown, no stimulus generated.")
-                pass
+            # 为确保可复现，若未提供 noise_seed 则使用固定种子
+            stim_seed = noise_seed if noise_seed is not None else 42
+            # 统一使用 n_nodes 作为刺激通道数，适用于 EI 和 bilinear 模型
+            # 这样刺激生成逻辑完全通用
+            n_channels_for_stim = n_stim_channels if self.model_type == 'bilinear' else self.n_nodes
+            
+            tasks = self.stim_generator.generate_task_schedule(n_channels=n_channels_for_stim, seed=stim_seed)
+            stimulus, stimulus_config = self.stim_generator.generate_ode_stimulus(tasks, n_channels_for_stim, seed=stim_seed)
 
         # 生成噪声
         # ODE 噪声: eta(t) = sigma * epsilon(t)
@@ -185,6 +212,9 @@ class ODESimulator:
         if sampling_steps < 1:
             sampling_steps = 1
         
+        # 进度输出（每 10% 输出一次）
+        progress_interval = max(1, self.n_time_steps // 10)
+        
         for i in range(self.n_time_steps):
 
             t = self.time_points[i]
@@ -206,13 +236,30 @@ class ODESimulator:
             # 且 sigma ~ 0.01-0.05.
             # 我们假设这是加在导数上的项，离散化时乘以 dt。
             
-            dydt = self.model.dynamics(t, state, u_t)
+            # 兼容时间单位：模型参数假设单位为秒(s)，但dt是ms
+            # 因此这里传入 t (ms) 实际上只是为了查找刺激，动力学方程应该基于 s
+            # ODESimulator 的 dt (ms) 在积分时应该转为 s: dt_s = self.dt / 1000.0
+            
+            # 注意: dynamics 内部参数如 tau=0.1s，意味着 dS/dt 单位是 1/s
+            # 所以更新时 delta_S = (dS/dt) * dt_s
+            
+            dt_s = self.dt / 1000.0
+            # dynamics 的 t 参数在模型内部主要用于非自主系统（依赖时间的参数）
+            # 目前模型是自主的（不显式依赖 t），但为了接口一致性，传入秒单位的 t
+            dydt = self.model.dynamics(t / 1000.0, state, u_t)
             
             # Euler step
-            # state = state + dydt * self.dt + noise[i] * np.sqrt(self.dt) # SDE standard
+            # state = state + dydt * dt_s + noise[i] * np.sqrt(dt_s) # SDE standard if noise is variance 1
             # 按照题目描述，直接加噪声项
             # 假设 noise[i] 已经是 eta(t)
-            state = state + (dydt + noise[i]) * self.dt
+            # state = state + (dydt + noise[i]) * dt_s
+            
+            # BEI 模型对步长敏感，使用 Euler-Maruyama 可能会有数值问题
+            # 这里简单使用 Euler，注意 dt 必须足够小 (e.g. 0.1-1.0 ms)
+            state = state + dydt * dt_s + noise[i] * np.sqrt(dt_s)
+            
+            # 物理约束：神经门控变量 S_E, S_I 必须非负
+            state = np.maximum(state, 0.0)
 
             # 数值健壮性检查：一旦出现 NaN/Inf，后续会迅速污染整段序列
             if not np.all(np.isfinite(state)):
@@ -225,7 +272,13 @@ class ODESimulator:
             
             if i % sampling_steps == 0:
                 states.append(state.copy())
+            
+            # 进度输出（每 10% 输出一次）
+            if (i + 1) % progress_interval == 0:
+                progress = (i + 1) / self.n_time_steps * 100
+                print(f"ODE仿真进度: {progress:.1f}% ({i+1}/{self.n_time_steps})", end='\r')
                 
+        print()  # 换行
         states = np.array(states)
         
         # 计算 BOLD 信号
@@ -242,8 +295,9 @@ class ODESimulator:
         
         return {
             'time_points': time_points_downsampled,
-            #'neural_activity': states,
+            'neural_activity': states,
             'bold_signal': bold,
+            #'stimulus': stimulus, # 返回完整的刺激时间序列 (T, N)
             'stimulus_config': stimulus_config,
             'model_params': self.model.params, # 包含生成的 B 和 C
             'initial_state': initial_state, # 保存初始状态以支持完全复现

@@ -29,6 +29,7 @@ class TaskEvent:
     start_time: float
     end_time: float
     duration: float
+    rng_seed: int = 0  # 用于可复现实验的随机种子（生成波形内部随机性）
     # ODE 参数
     active_channels: List[int] = field(default_factory=list)
     amplitudes_ode: List[float] = field(default_factory=list)
@@ -36,6 +37,8 @@ class TaskEvent:
     seed_vertices: List[int] = field(default_factory=list)
     amplitude_pde: float = 0.0
     sigma_s: float = 10.0
+    # 波形类型 (新增)
+    waveform_type: str = 'boxcar' # 'boxcar', 'impulse', 'continuous'
 
 class PDEStimulus:
     """PDE刺激函数包装器，避免生成巨大的 (T, N) 数组"""
@@ -99,120 +102,203 @@ class StimulationGenerator:
         
         return s1 * (1.0 - s2)
 
+    def _impulse_train(self, t: np.ndarray, t0: float, t1: float, interval_mean: float = 2000.0, rng: Optional[np.random.RandomState] = None) -> np.ndarray:
+        """
+        生成随机脉冲序列
+        """
+        envelope = np.zeros_like(t)
+        rng = rng or np.random.RandomState()
+        
+        current_t = t0
+        while current_t < t1:
+            # 找到对应的时间索引
+            idx = int(current_t / self.dt)
+            if 0 <= idx < self.n_time_steps:
+                # 脉冲宽度 100ms
+                width_idx = int(100.0 / self.dt)
+                envelope[idx : min(idx + width_idx, self.n_time_steps)] = 1.0
+            
+            # 下一个脉冲
+            current_t += rng.exponential(interval_mean)
+            
+        return envelope
+
+    def _continuous_signal(self, t: np.ndarray, t0: float, t1: float, rng: Optional[np.random.RandomState] = None) -> np.ndarray:
+        """
+        生成连续变化信号 (滤波噪声或正弦组合)
+        """
+        rng = rng or np.random.RandomState()
+        # 只在 t0 到 t1 之间非零
+        mask = (t >= t0) & (t <= t1)
+        
+        # 使用正弦波组合模拟自然信号
+        n_freqs = 5
+        signal = np.zeros_like(t)
+        
+        # 基频 0.05Hz - 0.5Hz
+        freqs = rng.uniform(0.05, 0.5, n_freqs)
+        phases = rng.uniform(0, 2*np.pi, n_freqs)
+        amps = rng.exponential(1.0, n_freqs)
+        amps /= np.sum(amps) # 归一化
+        
+        for f, phi, a in zip(freqs, phases, amps):
+            signal += a * np.sin(2 * np.pi * f * t / 1000.0 + phi)
+            
+        # 加上包络使得两端平滑
+        window = self._smooth_boxcar(t, t0, t1, rise_time=1000.0)
+        return signal * window
+
     def generate_task_schedule(self, 
                              n_channels: int, 
-                             n_vertices_pde: Optional[int] = None) -> List[TaskEvent]:
+                             n_vertices_pde: Optional[int] = None,
+                             seed: int = 42) -> List[TaskEvent]:
         """
         生成 Run 的 Task 调度序列
         
-        参数:
-            n_channels: ODE刺激通道数 K
-            n_vertices_pde: PDE顶点数 (用于随机选择seed)
-            
-        返回:
-            task_list: TaskEvent 列表
+        1. 每个刺激模块时长 12.8s
+        2. 每个模块根据剩余时间动态插入尽可能多的任务
+        3. 任务随机为 2s-10s
+        4. 混合三种波形
+        
+        Added seed for reproducibility.
         """
+        # Set seed locally if provided, otherwise rely on global state (not recommended for strict reproducibility)
+        # Better: create a local RandomState
+        rng = np.random.RandomState(seed)
+        
         tasks = []
-        current_time = 0.0
-        task_idx = 0
+        module_duration = 12800.0 # 12.8s
         
-        # 预留开始的一段静息时间
-        current_time += np.random.uniform(1000, 3000)
+        n_modules = int(self.duration / module_duration)
         
-        while current_time < self.duration - 5000: # 留出结尾余量
-            # Task duration: 5s -15s
-            dur = np.random.uniform(5000, 15000)
-            if current_time + dur > self.duration:
-                dur = self.duration - current_time - 1000
-                if dur < 5000: break
+        for mod_idx in range(n_modules):
+            module_start = mod_idx * module_duration
             
-            t_start = current_time
-            t_end = current_time + dur
+            current_time = module_start + rng.uniform(0, 1000) # 初始随机延迟
             
-            # ODE Params
-            # 随机选择 1-3 个通道
-            # 小巧思：EI 的 n_channels 为节点数，可以刺激所有节点，但实际上只会选择最多 3 个节点
-            #
-            # 注意：PDE-only 模式下会传入 n_channels=0（见 pde_simulator.py），此时应跳过 ODE 通道采样。
-            active_chs: List[int] = []
-            amps_ode: List[float] = []
-            if n_channels > 0:
-                n_active = np.random.randint(1, min(4, n_channels + 1))
-                active_chs = np.random.choice(n_channels, size=n_active, replace=False).tolist()
-
-                # 幅度采样: [-2.0, -0.5] U [0.5, 2.0]
-                for _ in range(n_active):
-                    if np.random.rand() > 0.5:
-                        amp = np.random.uniform(0.5, 2.0)
-                    else:
-                        amp = np.random.uniform(-2.0, -0.5)
-                    amps_ode.append(amp)
+            # 动态生成任务：根据剩余时间尽可能多地插入任务
+            while True:
+                # 剩余可用时间
+                time_left = (module_start + module_duration) - current_time
+                if time_left < 5000: break # 时间不够，跳过
                 
-            # PDE Params
-            seeds = []
-            amp_pde = 0.0
-            sigma_s = 10.0
-            if n_vertices_pde is not None:
-                n_seeds = np.random.randint(1, 4)
-                seeds = np.random.choice(n_vertices_pde, size=n_seeds, replace=False).tolist()
-                if np.random.rand() > 0.5:
-                    amp_pde = np.random.uniform(0.5, 2.0)
-                else:
-                    amp_pde = np.random.uniform(-2.0, -0.5)
-                sigma_s = np.random.uniform(5.0, 15.0)
-            
-            task = TaskEvent(
-                index=task_idx,
-                start_time=t_start,
-                end_time=t_end,
-                duration=dur,
-                active_channels=active_chs,
-                amplitudes_ode=amps_ode,
-                seed_vertices=seeds,
-                amplitude_pde=amp_pde,
-                sigma_s=sigma_s
-            )
-            tasks.append(task)
-            
-            current_time = t_end
-            task_idx += 1
-            
+                # 任务时长 2s - 12s (但不超过剩余时间)
+                max_dur = min(12000.0, time_left - 1000) # 留1s间隔
+                if max_dur < 2000: break
+                
+                dur = rng.uniform(2000.0, max_dur)
+                t_start = current_time
+                t_end = t_start + dur
+                
+                # 随机选择波形类型
+                wf_type = rng.choice(['boxcar', 'impulse', 'continuous'])
+                
+                # ODE Params (随机刺激多个脑区)
+                active_chs: List[int] = []
+                amps_ode: List[float] = []
+                if n_channels > 0:
+                    # 刺激更多脑区，模拟复杂任务
+                    n_active = rng.randint(1, min(5, n_channels + 1))
+                    active_chs = rng.choice(n_channels, size=n_active, replace=False).tolist()
+
+                    for _ in range(n_active):
+                        # 幅度随机，可正可负
+                        amp = rng.uniform(0.5, 2.0) * rng.choice([1, -1])
+                        amps_ode.append(amp)
+                
+                # PDE Params
+                seeds = []
+                amp_pde = 0.0
+                sigma_s = 10.0
+                if n_vertices_pde is not None:
+                    n_seeds = rng.randint(1, 5)
+                    seeds = rng.choice(n_vertices_pde, size=n_seeds, replace=False).tolist()
+                    amp_pde = rng.uniform(0.5, 2.0) * rng.choice([1, -1])
+                    sigma_s = rng.uniform(5.0, 15.0)
+                
+                task = TaskEvent(
+                    index=len(tasks),
+                    start_time=t_start,
+                    end_time=t_end,
+                    duration=dur,
+                    rng_seed=rng.randint(1_000_000_000),
+                    active_channels=active_chs,
+                    amplitudes_ode=amps_ode,
+                    seed_vertices=seeds,
+                    amplitude_pde=amp_pde,
+                    sigma_s=sigma_s,
+                    waveform_type=wf_type
+                )
+                tasks.append(task)
+                
+                current_time = t_end + rng.uniform(500, 2000) # 任务间隔
+                
         return tasks
 
     def generate_ode_stimulus(self, 
                             tasks: List[TaskEvent], 
-                            n_channels: int) -> Tuple[np.ndarray, Dict]:
+                            n_channels: int,
+                            seed: int = 42) -> Tuple[np.ndarray, Dict]:
         """
         生成 ODE 刺激 u(t) (K维)
-        
-        返回:
-            u: (n_time_steps, n_channels)
-            config: 配置信息
         """
-        u = np.zeros((self.n_time_steps, n_channels))
+        # Local RNG for reproducibility (global-level)
+        rng_global = np.random.RandomState(seed)
+        u = np.zeros((self.n_time_steps, n_channels), dtype=np.float32)
+        
+        task_configs = []
         
         for task in tasks:
-            # 时间包络
-            envelope = self._smooth_boxcar(self.time_points, task.start_time, task.end_time)
+            rng_task = np.random.RandomState(task.rng_seed)
+            
+            if task.waveform_type == 'boxcar':
+                # Boxcar 随机截断
+                min_dur = max(1000.0, task.duration * 0.5)
+                actual_dur = rng_task.uniform(min_dur, task.duration)
+                actual_end_time = task.start_time + actual_dur
+                envelope = self._smooth_boxcar(self.time_points, task.start_time, actual_end_time)
+                
+                # Record specific params for reproducibility
+                task_specific_params = {'actual_end_time': actual_end_time}
+                
+            elif task.waveform_type == 'impulse':
+                envelope = self._impulse_train(self.time_points, task.start_time, task.end_time, rng=rng_task)
+                task_specific_params = {'interval_mean': 2000.0}
+                
+            elif task.waveform_type == 'continuous':
+                envelope = self._continuous_signal(self.time_points, task.start_time, task.end_time, rng=rng_task)
+                task_specific_params = {'n_freqs': 5}
+                
+            else:
+                envelope = self._smooth_boxcar(self.time_points, task.start_time, task.end_time)
+                task_specific_params = {}
             
             for ch_idx, amp in zip(task.active_channels, task.amplitudes_ode):
                 u[:, ch_idx] += amp * envelope
+            
+            task_configs.append({
+                'index': task.index,
+                'range': (task.start_time, task.end_time),
+                'type': task.waveform_type,
+                'channels': task.active_channels,
+                'amplitudes': task.amplitudes_ode,
+                'task_seed': task.rng_seed, # Crucial for reproduction
+                'specific_params': task_specific_params
+            })
                 
-        # 添加弱慢噪声 (可选)
-        # 这里不添加，保持确定性部分，噪声在外部添加或作为独立项
+        # 添加背景噪声（可复现）
+        noise_level = 0.05
+        background_noise_seed = rng_global.randint(1_000_000_000)
+        noise_params = {'sigma': noise_level, 'color': 'ou', 'tau_noise': 100.0, 'seed': background_noise_seed}
+        background_noise, noise_cfg = self.generate_noise(**noise_params)
+        u += background_noise
         
         config = {
-            'type': 'task_based_ode',
+            'type': 'mixed_task_ode',
             'n_channels': n_channels,
-            'tasks': [
-                {
-                    'index': t.index,
-                    'range': (t.start_time, t.end_time),
-                    'channels': t.active_channels,
-                    'amplitudes': t.amplitudes_ode
-                }
-                for t in tasks
-            ]
+            'tasks': task_configs,
+            'noise': noise_params,
+            'global_seed': seed
         }
         return u, config
 
@@ -222,39 +308,32 @@ class StimulationGenerator:
                             faces: Optional[np.ndarray] = None) -> Tuple[Union[np.ndarray, Callable], Dict]:
         """
         生成 PDE 刺激 u_pde(s, t)
-        
-        参数:
-            vertices: (N, 3) 顶点坐标
-            faces: (M, 3) 面索引
-            
-        返回:
-            u_pde: Callable (t -> np.ndarray) or np.ndarray
-            config: 配置信息
         """
         n_verts = vertices.shape[0]
-        
-        # 预计算任务的空间分布和时间包络
         task_data = []
+        task_configs = []
         
         for task in tasks:
             if not task.seed_vertices:
                 continue
                 
-            # 时间包络 (T,)
-            envelope = self._smooth_boxcar(self.time_points, task.start_time, task.end_time)
+            # 波形生成
+            if task.waveform_type == 'boxcar':
+                envelope = self._smooth_boxcar(self.time_points, task.start_time, task.end_time)
+            elif task.waveform_type == 'impulse':
+                envelope = self._impulse_train(self.time_points, task.start_time, task.end_time, rng=np.random.RandomState(task.rng_seed))
+            elif task.waveform_type == 'continuous':
+                envelope = self._continuous_signal(self.time_points, task.start_time, task.end_time, rng=np.random.RandomState(task.rng_seed))
+            else:
+                envelope = self._smooth_boxcar(self.time_points, task.start_time, task.end_time)
             
-            # 空间分布 phi(s) (N,)
+            # 空间分布
             spatial_map = np.zeros(n_verts)
-            
             for seed in task.seed_vertices:
                 seed_pos = vertices[seed]
-                # 计算所有点到 seed 的距离 (欧氏距离近似)
                 dists = np.linalg.norm(vertices - seed_pos, axis=1)
-                
-                # Gaussian patch
                 patch = np.exp(-dists**2 / (2 * task.sigma_s**2))
                 patch[patch < 0.01] = 0
-                
                 spatial_map += patch
             
             task_data.append({
@@ -262,22 +341,26 @@ class StimulationGenerator:
                 'spatial_map': spatial_map,
                 'amp': task.amplitude_pde
             })
+            
+            task_configs.append({
+                'index': task.index,
+                'range': (task.start_time, task.end_time),
+                'type': task.waveform_type,
+                'seeds': task.seed_vertices,
+                'amplitude': task.amplitude_pde,
+                'rng_seed': task.rng_seed,
+                'sigma_s': task.sigma_s
+            })
 
-        # 返回 Callable 对象
+        # 对于 PDE，我们无法像 ODE 那样简单叠加全脑噪声并存储（太大了）
+        # 所以这里的 PDEStimulus 只包含确定的任务成分
+        # 噪声会在 PDESimulator 内部积分时添加
+        
         u_pde = PDEStimulus(n_verts, self.dt, self.duration, task_data)
             
         config = {
-            'type': 'task_based_pde',
-            'tasks': [
-                {
-                    'index': t.index,
-                    'range': (t.start_time, t.end_time),
-                    'seeds': t.seed_vertices,
-                    'amplitude': t.amplitude_pde,
-                    'sigma_s': t.sigma_s
-                }
-                for t in tasks
-            ]
+            'type': 'mixed_task_pde',
+            'tasks': task_configs
         }
         return u_pde, config
 
@@ -289,16 +372,6 @@ class StimulationGenerator:
 
         """
         生成Boxcar（矩形波）刺激
-        
-        参数:
-            onset: 开始时间 (ms)
-            duration: 持续时间 (ms)
-            amplitude: 幅度
-            nodes: 受刺激的节点索引列表。如果为None，则所有节点受刺激。
-            
-        返回:
-            stimulus: (n_time_steps, n_nodes)
-            config: 刺激配置字典
         """
         stimulus = np.zeros((self.n_time_steps, self.n_nodes))
         
@@ -330,41 +403,26 @@ class StimulationGenerator:
                        sigma: float = 0.01, 
                        color: str = 'white', 
                        tau_noise: float = 50.0,
-                       seed: Optional[int] = None) -> Tuple[np.ndarray, Dict]:
+                       seed: Optional[int] = None,
+                       return_rng: bool = False) -> Tuple[np.ndarray, Dict]:
         """
         生成噪声刺激
-        
-        参数:
-            sigma: 噪声标准差
-            color: 'white' (白噪声) 或 'ou' (Ornstein-Uhlenbeck过程/红噪声)
-            tau_noise: OU过程的时间常数 (ms)
-            seed: 随机种子
-            
-        返回:
-            noise: (n_time_steps, n_nodes)
-            config: 噪声配置字典
         """
-        if seed is not None:
-            np.random.seed(seed)
+        rng = np.random.RandomState(seed) if seed is not None else np.random
             
         if color == 'white':
-            noise = np.random.normal(0, sigma, (self.n_time_steps, self.n_nodes))
+            noise = rng.normal(0, sigma, (self.n_time_steps, self.n_nodes))
         
         elif color == 'ou':
             # Ornstein-Uhlenbeck process
-            # dx = -x/tau * dt + sigma * sqrt(2/tau) * dW
             noise = np.zeros((self.n_time_steps, self.n_nodes))
-            # 精确离散 OU 过程更新
-            # 连续 SDE: dX = -X/tau_noise dt + sigma * sqrt(2/tau_noise) dW
             theta = 1.0 / tau_noise
-            decay = np.exp(-theta * self.dt)  # e^{-theta dt} = e^{-dt/tau}
-            # 增量标准差遵循精确解的方差：Var = sigma^2 * (1 - e^{-2 theta dt})
+            decay = np.exp(-theta * self.dt)
             incr_std = sigma * np.sqrt(1.0 - decay**2)
-            # 初始状态采用平稳分布 N(0, sigma^2)
-            x = np.random.normal(0.0, sigma, size=self.n_nodes)
+            x = rng.normal(0.0, sigma, size=self.n_nodes)
             
             for i in range(self.n_time_steps):
-                x = decay * x + incr_std * np.random.normal(0.0, 1.0, size=self.n_nodes)
+                x = decay * x + incr_std * rng.normal(0.0, 1.0, size=self.n_nodes)
                 noise[i] = x
         
         config = {
@@ -376,7 +434,9 @@ class StimulationGenerator:
                 'seed': seed
             }
         }
-                
+        
+        if return_rng:
+            return noise, config, rng
         return noise, config            
 
     def combine_stimuli(self, stimuli_list: List[np.ndarray]) -> np.ndarray:
