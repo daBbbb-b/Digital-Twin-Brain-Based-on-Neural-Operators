@@ -16,7 +16,7 @@ def main():
     sim_type = "ode"  # 显式指定模拟类型
     
     # 寻找数据文件: 优先使用 dataset/simulation_data 下的所有 pkl 文件
-    data_dir = project_root / "dataset" / "ode_ec_new_1000"
+    data_dir = project_root / "dataset" / "ode_sc_new_1000"
     pkl_files = list(data_dir.glob("*.pkl"))
     
     # 如果没找到，尝试 dataset/ 目录
@@ -73,7 +73,7 @@ def main():
     loss_fn = nn.MSELoss()
 
     best = 1e9
-    for epoch in range(1, 41):
+    for epoch in range(1, 51):
         model.train()
         tot = 0
         for x,u in train_loader:
@@ -102,6 +102,6 @@ def main():
 
 
 if __name__ == "__main__":
-    best_model_path = os.path.join(project_root, "results", "models", "fno1d_ode_ec.pth")
+    best_model_path = os.path.join(project_root, "results", "models", "fno1d_ode_sc.pth")
     os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
     main()

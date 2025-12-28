@@ -24,7 +24,7 @@ def train_deeponet():
     dim_y = 16 # 查询坐标维度，维度越高，表示查询点信息越丰富
 
     print("加载数据...")
-    data_dir = os.path.join(project_root, "dataset", "ode_ec_new_1000")
+    data_dir = os.path.join(project_root, "dataset", "ode_sc_new_1000")
     pkl_files = [os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith(".pkl")]
 
     all_x, all_y, all_u = [], [], []
@@ -120,7 +120,7 @@ def train_deeponet():
 
         if val_loss < best_val:
             best_val = val_loss
-            save_path = os.path.join(project_root, "results", "models", "deeponet_ode_ec.pth")
+            save_path = os.path.join(project_root, "results", "models", "deeponet_ode_sc.pth")
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             torch.save(model.state_dict(), save_path)
             print(f"保存最佳模型，验证损失: {best_val:.6f}")
