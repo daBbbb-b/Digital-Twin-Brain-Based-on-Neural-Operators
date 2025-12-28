@@ -13,18 +13,19 @@ def train_mlp():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 训练参数
-    T = 512              # 时间步长，需与数据切分一致
+    T = 1024              # 时间步长，需与数据切分一致
+    sim_type = "ode"      # 显式指定模拟类型
     batch_size = 16
     lr = 1e-3
     epochs = 40
 
     # 加载数据
-    data_dir = os.path.join(project_root, "dataset", "simulation_data")
+    data_dir = os.path.join(project_root, "dataset", "ode_ec_new_1000")
     pkl_files = [os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith(".pkl")]
 
     all_x, all_u = [], []
     for pkl_path in pkl_files:
-        x, u = load_data_from_pkl(pkl_path, T=T)
+        x, u = load_data_from_pkl(pkl_path, T=T, normalize=False, sim_type=sim_type)
         if x is None or u is None:
             continue
         all_x.append(x)  # [num_samples, T, C]
@@ -87,7 +88,7 @@ def train_mlp():
         # 保存最优
         if val_loss < best_val:
             best_val = val_loss
-            save_path = os.path.join(project_root, "results", "models", "best_mlp.pth")
+            save_path = os.path.join(project_root, "results", "models", "mlp_ode_ec.pth")
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             torch.save(model.state_dict(), save_path)
             print(f"保存最佳模型，验证损失: {best_val:.6f}")

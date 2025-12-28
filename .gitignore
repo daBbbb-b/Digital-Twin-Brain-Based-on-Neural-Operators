@@ -44,8 +44,10 @@ data/simulation/*.npz
 *.mat
 dataset/T103
 dataset/simulation_data/
-dataset/simulation_data_ec
-dataset/simulation_data_sc
+dataset/ode_ec_new_1000
+dataset/ode_sc_new_1000
+dataset/pde_surface_new_500
+/dataset/brain_simulation_data.zip
 
 # 模型文件
 models/saved/*.pth

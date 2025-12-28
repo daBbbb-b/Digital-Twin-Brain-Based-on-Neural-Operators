@@ -19,16 +19,17 @@ def train_deeponet():
     batch_size = 8
     learning_rate = 1e-3
     epochs = 50
-    T = 512
+    T = 1024
+    sim_type = "ode"  # 显式指定模拟类型，避免依赖数据内的标记
     dim_y = 16 # 查询坐标维度，维度越高，表示查询点信息越丰富
 
     print("加载数据...")
-    data_dir = os.path.join(project_root, "dataset", "simulation_data")
+    data_dir = os.path.join(project_root, "dataset", "ode_ec_new_1000")
     pkl_files = [os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith(".pkl")]
 
     all_x, all_y, all_u = [], [], []
     for pkl_path in pkl_files:
-        x, u = load_data_from_pkl(pkl_path, T=T)
+        x, u = load_data_from_pkl(pkl_path, T=T, normalize=False, sim_type=sim_type)
         if x is None or u is None:
             continue
         num_samples, _, C = x.shape
@@ -119,7 +120,7 @@ def train_deeponet():
 
         if val_loss < best_val:
             best_val = val_loss
-            save_path = os.path.join(project_root, "results", "models", "best_deeponet.pth")
+            save_path = os.path.join(project_root, "results", "models", "deeponet_ode_ec.pth")
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             torch.save(model.state_dict(), save_path)
             print(f"保存最佳模型，验证损失: {best_val:.6f}")

@@ -12,10 +12,11 @@ from data_loader import load_data_from_pkl
 
 def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    T = 256
+    T = 1024
+    sim_type = "ode"  # 显式指定模拟类型
     
     # 寻找数据文件: 优先使用 dataset/simulation_data 下的所有 pkl 文件
-    data_dir = project_root / "dataset" / "simulation_data"
+    data_dir = project_root / "dataset" / "ode_ec_new_1000"
     pkl_files = list(data_dir.glob("*.pkl"))
     
     # 如果没找到，尝试 dataset/ 目录
@@ -35,7 +36,7 @@ def main():
     else:
         print(f"找到 {len(pkl_files)} 个数据文件，开始加载...")
         for pkl_path in pkl_files:
-            x, u = load_data_from_pkl(pkl_path, T=T)
+            x, u = load_data_from_pkl(pkl_path, T=T, normalize=False, sim_type=sim_type)
             if x is not None and u is not None:
                 all_x.append(x)
                 all_u.append(u)
@@ -101,6 +102,6 @@ def main():
 
 
 if __name__ == "__main__":
-    best_model_path = os.path.join(project_root, "results", "models", "best_fno1d.pth")
+    best_model_path = os.path.join(project_root, "results", "models", "fno1d_ode_ec.pth")
     os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
     main()
