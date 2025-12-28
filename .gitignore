@@ -44,6 +44,8 @@ data/simulation/*.npz
 *.mat
 dataset/T103
 dataset/simulation_data/
+dataset/simulation_data_ec
+dataset/simulation_data_sc
 
 # 模型文件
 models/saved/*.pth

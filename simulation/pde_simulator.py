@@ -194,7 +194,7 @@ class PDESimulator:
         
         return {
             'time_points': time_points_downsampled,
-            #'neural_activity': states,
+            'neural_activity': states,
             'bold_signal': bold,
             'stimulus_config': stimulus_config,
             'initial_state': initial_state,

@@ -227,16 +227,67 @@ def plot_pde_stimulus_timeseries(file_path, output_dir):
         print(f"No PDE tasks found in {file_path}")
         return
     
-    # 获取时间点
+    # 获取时间点和metadata
     time_points = data.get('time_points')
     metadata = data.get('metadata', {})
     dt = metadata.get('dt', 0.1)
     duration = metadata.get('duration', 600000)
+    sampling_interval = metadata.get('sampling_interval', 50.0)
     
     if time_points is None:
         time_points = np.arange(0, duration, dt)
     
     time_s = time_points / 1000.0
+    n_time_steps = len(time_points)
+    
+    # 复原噪声序列（如果metadata中有噪声信息）
+    noise_signal = None
+    if 'noise_level' in metadata and 'noise_seed' in metadata:
+        noise_level = metadata['noise_level']
+        noise_seed = metadata['noise_seed']
+        
+        # 计算总时间步数和采样步数
+        n_total_steps = int(np.round(duration / dt))
+        sampling_steps = int(np.round(sampling_interval / dt))
+        if sampling_steps < 1:
+            sampling_steps = 1
+        
+        # 使用相同的随机种子重新生成噪声
+        # 注意：PDE仿真中使用的是 np.random.default_rng，需要保持一致
+        rng = np.random.default_rng(noise_seed)
+        
+        # 生成完整的噪声序列（每个时间步）
+        # 注意：需要知道节点数，优先从数据中获取
+        n_nodes = None
+        if 'neural_activity' in data:
+            n_nodes = data['neural_activity'].shape[1]
+        elif 'bold_signal' in data:
+            bold = data['bold_signal']
+            if hasattr(bold, 'shape') and len(bold.shape) > 1:
+                n_nodes = bold.shape[1]
+        elif tasks and len(tasks) > 0:
+            # 从tasks中推断最大顶点索引
+            max_vertex = 0
+            for task in tasks:
+                seeds = task.get('seeds', [])
+                if seeds:
+                    max_vertex = max(max_vertex, max(seeds))
+            n_nodes = max_vertex + 1 if max_vertex > 0 else None
+        
+        if n_nodes is not None and n_nodes > 0:
+            noise_full = np.zeros((n_total_steps, n_nodes))
+            for i in range(n_total_steps):
+                noise_full[i] = rng.normal(0.0, noise_level, size=n_nodes)
+            
+            # 按采样间隔降采样（与时间点对齐）
+            noise_signal = noise_full[::sampling_steps]
+            
+            # 确保长度匹配
+            if noise_signal.shape[0] != n_time_steps:
+                min_len = min(noise_signal.shape[0], n_time_steps)
+                noise_signal = noise_signal[:min_len]
+        else:
+            print(f"[警告] 无法确定节点数，跳过噪声复原")
     
     # 创建图形
     fig, ax = plt.subplots(figsize=(16, 6))
@@ -251,6 +302,9 @@ def plot_pde_stimulus_timeseries(file_path, output_dir):
     
     # 使用颜色映射
     colors = plt.cm.get_cmap('tab10', len(seed_vertices_to_plot))
+    
+    # 保存每个顶点的刺激时间序列，用于后续计算"刺激+噪声"
+    stimulus_timeseries_dict = {}
     
     # 为每个种子顶点计算并绘制时间序列
     for seed_idx, vertex_idx in enumerate(seed_vertices_to_plot):
@@ -280,10 +334,53 @@ def plot_pde_stimulus_timeseries(file_path, output_dir):
                 
                 stimulus_timeseries[i] += amplitude * envelope
         
-        # 绘制
+        # 保存刺激时间序列
+        stimulus_timeseries_dict[vertex_idx] = stimulus_timeseries
+        
+        # 绘制原始刺激
         ax.plot(time_s, stimulus_timeseries, 
-               label=f'Vertex {vertex_idx}', 
-               color=colors(seed_idx), linewidth=1.5, alpha=0.8)
+               label=f'Stimulus Vertex {vertex_idx}', 
+               color=colors(seed_idx), linewidth=1.5, alpha=0.8, linestyle='-')
+    
+    # 绘制噪声和"刺激+噪声"组合（如果可用）
+    if noise_signal is not None:
+        min_len = min(len(time_s), noise_signal.shape[0])
+        
+        # 计算噪声的平均值
+        noise_mean = np.mean(noise_signal, axis=1)
+        
+        # 绘制噪声平均值（如果值足够大，否则可能看不见）
+        noise_mean_abs_max = np.max(np.abs(noise_mean))
+        if noise_mean_abs_max > 1e-6:  # 只有当噪声平均值足够大时才绘制
+            ax.plot(time_s[:min_len], noise_mean[:min_len], 
+                   linewidth=1.0, color='blue', alpha=0.6, 
+                   linestyle='--', label='Mean Noise (all nodes)', zorder=5)
+        
+        # 对于有刺激的顶点，绘制该顶点的噪声和"刺激+噪声"的组合
+        # 限制显示数量，避免图例过于拥挤（最多显示前5个顶点的组合）
+        max_combined_plot = min(5, len(seed_vertices_to_plot))
+        for seed_idx, vertex_idx in enumerate(seed_vertices_to_plot[:max_combined_plot]):
+            if vertex_idx < noise_signal.shape[1]:
+                noise_at_vertex = noise_signal[:min_len, vertex_idx]
+                
+                # 绘制该顶点的噪声（单独显示）
+                ax.plot(time_s[:min_len], noise_at_vertex[:min_len], 
+                       color='cyan', linewidth=0.8, alpha=0.5, 
+                       linestyle=':', label=f'Noise at V{vertex_idx}' if seed_idx == 0 else None, zorder=4)
+                
+                # 绘制"刺激+噪声"的组合
+                if vertex_idx in stimulus_timeseries_dict:
+                    stimulus = stimulus_timeseries_dict[vertex_idx]
+                    
+                    # 确保长度匹配
+                    stim_len = min(len(stimulus), min_len)
+                    total_input = stimulus[:stim_len] + noise_at_vertex[:stim_len]
+                    
+                    # 绘制"刺激+噪声"组合（使用更粗的线，不同的样式）
+                    # 使用相同的颜色但更粗的线，点划线样式
+                    ax.plot(time_s[:stim_len], total_input, 
+                           color=colors(seed_idx), linewidth=2.2, alpha=0.75, 
+                           linestyle='-.', label=f'Total Input V{vertex_idx} (Stim+Noise)', zorder=6)
     
     # 标注任务区域
     if tasks:
@@ -300,10 +397,48 @@ def plot_pde_stimulus_timeseries(file_path, output_dir):
     
     ax.set_xlabel('Time (s)', fontsize=12)
     ax.set_ylabel('Stimulus Amplitude', fontsize=12)
-    ax.set_title(f'PDE Stimulus Time Series (Key Vertices): {file_path.name}', 
-                fontsize=13, fontweight='bold')
+    
+    title = f'PDE Stimulus Time Series (Key Vertices): {file_path.name}'
+    if noise_signal is not None:
+        title += '\n(Stimulus, Noise, and Total Input = Stimulus + Noise)'
+    ax.set_title(title, fontsize=13, fontweight='bold')
+    
     ax.grid(True, alpha=0.3, linestyle='--')
-    ax.legend(loc='upper right', fontsize=9, ncol=2)
+    # 调整图例：如果条目太多，使用多列显示
+    n_legend_items = len(seed_vertices_to_plot) * 2 + (2 if noise_signal is not None else 0)  # 每个顶点有stimulus和total input，加上noise
+    ncol = 2 if n_legend_items <= 12 else 3
+    ax.legend(loc='upper right', fontsize=8, ncol=ncol, framealpha=0.9)
+    
+    # 添加噪声和总输入统计信息（如果可用）
+    if noise_signal is not None:
+        noise_mean = np.mean(noise_signal, axis=1)
+        min_len = min(len(time_s), noise_signal.shape[0])
+        
+        # 计算总输入（刺激+噪声）的统计信息（使用第一个有刺激的顶点）
+        total_input_stats = []
+        if seed_vertices_to_plot and seed_vertices_to_plot[0] in stimulus_timeseries_dict:
+            first_vertex = seed_vertices_to_plot[0]
+            if first_vertex < noise_signal.shape[1]:
+                stimulus = stimulus_timeseries_dict[first_vertex]
+                stim_len = min(len(stimulus), min_len)
+                noise_at_vertex = noise_signal[:stim_len, first_vertex]
+                total_input = stimulus[:stim_len] + noise_at_vertex[:stim_len]
+                total_input_stats = [
+                    f'Total Input Mean (V{first_vertex}): {np.mean(total_input):.4f}',
+                    f'Total Input Std (V{first_vertex}): {np.std(total_input):.4f}'
+                ]
+        
+        stats_text = (f'Noise Mean: {np.mean(noise_mean[:min_len]):.4f}\n'
+                     f'Noise Std: {np.std(noise_mean[:min_len]):.4f}\n'
+                     f'Noise Level: {metadata.get("noise_level", "N/A")}')
+        
+        if total_input_stats:
+            stats_text += '\n\n' + '\n'.join(total_input_stats)
+        
+        ax.text(0.02, 0.98, stats_text, 
+               transform=ax.transAxes, fontsize=9,
+               verticalalignment='top',
+               bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
     
     plt.tight_layout()
     

@@ -170,7 +170,7 @@ def plot_sample_stimulus(file_path, output_dir):
 def main():
     # 配置
     data_dir = Path('dataset/simulation_data')
-    output_dir = data_dir / 'plots'
+    output_dir = data_dir / 'plots'/'ode_stimulus'
     
     # 获取所有 .pkl 文件，并按文件名中的数字排序
     pkl_files = sorted(list(data_dir.glob('*.pkl')), key=extract_number_from_filename)

@@ -154,10 +154,10 @@ def main():
     
     # --- 配置区域 ---
     # 设置为 True 以启用对应的仿真生成，设置为 False 以跳过
-    ENABLE_ODE_EC = False   # 基于有效连接(EC)的ODE仿真
-    ENABLE_ODE_SC = True # 基于结构连接(SC)的ODE仿真
+    ENABLE_ODE_EC = True   # 基于有效连接(EC)的ODE仿真
+    ENABLE_ODE_SC = False # 基于结构连接(SC)的ODE仿真
     ENABLE_PDE_SURF = False # 基于皮层表面的PDE仿真
-    N_JOBS = 1  # 并行生成使用的CPU核心数，-1 表示使用所有核心
+    N_JOBS = 4  # 并行生成使用的CPU核心数，-1 表示使用所有核心
     # ----------------
 
     # 路径设置
@@ -187,9 +187,9 @@ def main():
         sc_matrix = sc_matrix / max_row_sum
         logger.info(f"SC矩阵已按最大行和 ({max_row_sum:.2f}) 归一化")
     
-    # 2. 生成EC矩阵 (模拟刘泉影的方法)
-    ec_matrix = generate_dummy_ec(n_nodes, seed=42)
-    logger.info("生成虚拟EC矩阵")
+    # 2. 加载EC矩阵
+    ec_matrix = pd.read_csv(dataset_dir / "EC_normalized.csv", header=None).values
+    logger.info(f"加载EC矩阵，大小: {ec_matrix.shape}")
     
     # 3. 仿真参数 (根据 Prompt 要求调整)
     # dt 是 ODE/EI 的离散步长（单位 ms）。
@@ -198,7 +198,7 @@ def main():
     dt = 0.5  # ms (提高精度)
     duration = 51200.0 # ms (Run时长 51.2s)
     sampling_interval = 50 # ms (采样/记录间隔)
-    n_samples = 1000 # 演示用样本数
+    n_samples = 1001 # 演示用样本数
     n_start = 0 # 样本起始编号
     
     # 记录关键超参数
