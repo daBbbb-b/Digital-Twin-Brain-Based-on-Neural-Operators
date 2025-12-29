@@ -51,7 +51,9 @@ def load_data_from_pkl(pkl_path, T=512, normalize=False, sim_type="auto"):
 
     参数:
     - pkl_path (str or Path): .pkl 文件的路径。
-    - T (int): 每个样本的时间步长（即序列长度）。数据将被切分为多个长度为 T 的样本。
+        - T (int or None): 每个样本的时间步长（即序列长度）。
+            - 当为正整数时，按长度 T 切分序列；
+            - 当为 None 或 <=0 时，不切分，直接使用完整序列（适合较短的 PDE 样本）。
     - normalize (bool): 是否对数据进行归一化处理（Z-score）。默认为 False。
     - sim_type (str): 模拟类型，"ode" | "pde" | "auto"。推荐显式传入，避免依赖数据中的字段。
 
@@ -265,14 +267,20 @@ def load_data_from_pkl(pkl_path, T=512, normalize=False, sim_type="auto"):
             x_full = torch.tensor(raw_x, dtype=torch.float32)  # 输出数据
             
             # 将数据切分为多个样本，每个样本长度为 T
-            num_samples = n_time // T  # 样本数量
-            if num_samples > 0:
-                # 切分数据并调整形状为 (num_samples, T, n_channels)
-                x = x_full[:num_samples*T].view(num_samples, T, n_channels)
-                u = u_full[:num_samples*T].view(num_samples, T, n_channels)
+            # 支持不切分（T<=0 或 None）或长度不足时回退到整段
+            if T is None or T <= 0:
+                x = x_full.unsqueeze(0)
+                u = u_full.unsqueeze(0)
             else:
-                # 如果数据不足以切分出一个样本，返回 None
-                return None, None
+                num_samples = n_time // T  # 样本数量
+                if num_samples > 0:
+                    # 切分数据并调整形状为 (num_samples, T, n_channels)
+                    x = x_full[:num_samples*T].view(num_samples, T, n_channels)
+                    u = u_full[:num_samples*T].view(num_samples, T, n_channels)
+                else:
+                    # 序列长度短于 T，直接使用整段序列
+                    x = x_full.unsqueeze(0)
+                    u = u_full.unsqueeze(0)
         else:
             # 如果数据格式未知，打印警告并返回 None
             print(f"跳过 {pkl_path}: 未知的数据格式")

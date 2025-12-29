@@ -1,4 +1,5 @@
 import os, sys, torch
+import argparse
 from torch import nn, optim
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -9,19 +10,67 @@ sys.path.append(project_root)
 from models.mlp import MLP
 from data_loader import load_data_from_pkl
 
-def train_mlp():
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train MLP on ODE/PDE data")
+    parser.add_argument("--data_dir", type=str, default=None, help="Directory containing .pkl files")
+    parser.add_argument("--sim_type", choices=["pde", "ode_ec", "ode_sc", "auto"], default="auto", help="Simulation type")
+    parser.add_argument("--T", type=int, default=None, help="Sequence length; None/<=0 keeps full length")
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--epochs", type=int, default=40)
+    parser.add_argument("--hidden", type=int, default=128, help="Hidden dimension per layer (2 layers)")
+    return parser.parse_args()
+
+
+def discover_pkl_files(sim_type: str, explicit_dir: str | None):
+    if explicit_dir:
+        candidates = [os.path.abspath(explicit_dir)]
+    elif sim_type == "pde":
+        candidates = [os.path.join(project_root, "dataset", "pde_surface_new_500")]
+    elif sim_type == "ode_ec":
+        candidates = [os.path.join(project_root, "dataset", "ode_ec_new_1000")]
+    elif sim_type == "ode_sc":
+        candidates = [os.path.join(project_root, "dataset", "ode_sc_new_1000")]
+
+    for d in candidates:
+        if os.path.isdir(d):
+            pkl_files = [os.path.join(d, f) for f in os.listdir(d) if f.endswith(".pkl")]
+            if pkl_files:
+                return d, pkl_files
+
+    fallback = os.path.join(project_root, "dataset")
+    pkl_files = [os.path.join(fallback, f) for f in os.listdir(fallback) if f.endswith(".pkl")] if os.path.isdir(fallback) else []
+    return fallback, pkl_files
+
+
+def train_mlp(args=None):
+    args = args or parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # 训练参数
-    T = 1024              # 时间步长，需与数据切分一致
-    sim_type = "ode"      # 显式指定模拟类型
-    batch_size = 16
-    lr = 1e-3
-    epochs = 40
+    # 判定 sim_type
+    if args.sim_type == "auto":
+        if args.data_dir and "pde" in args.data_dir.lower():
+            sim_type = "pde"
+        elif args.data_dir and "ode_ec" in args.data_dir.lower():
+            sim_type = "ode_ec"
+        elif args.data_dir and "ode_sc" in args.data_dir.lower():
+            sim_type = "ode_sc"
+    else:
+        sim_type = args.sim_type
 
-    # 加载数据
-    data_dir = os.path.join(project_root, "dataset", "ode_ec_new_1000")
-    pkl_files = [os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith(".pkl")]
+    # 设置 T：PDE 用完整序列，ODE 默认 1024
+    T = args.T
+    if T is None or T <= 0:
+        T = None if sim_type == "pde" else 1024
+
+    batch_size = args.batch_size
+    lr = args.lr
+    epochs = args.epochs
+    hidden = args.hidden
+
+    data_dir, pkl_files = discover_pkl_files(sim_type, args.data_dir)
+    print(f"加载数据... sim_type={sim_type}, data_dir={data_dir}, files={len(pkl_files)}")
 
     all_x, all_u = [], []
     for pkl_path in pkl_files:
@@ -52,9 +101,12 @@ def train_mlp():
     val_loader   = DataLoader(val_ds, batch_size=batch_size)
 
     # 模型、优化器、损失
-    model = MLP(input_dim=C, output_dim=C, hidden_dims=(128, 128)).to(device)
+    model = MLP(input_dim=C, output_dim=C, hidden_dims=(hidden, hidden)).to(device)
     opt = optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.MSELoss()
+
+    save_path = os.path.join(project_root, "results", "models", f"mlp_{sim_type}.pth")
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     best_val = float("inf")
     print("开始训练 MLP...")
@@ -88,8 +140,6 @@ def train_mlp():
         # 保存最优
         if val_loss < best_val:
             best_val = val_loss
-            save_path = os.path.join(project_root, "results", "models", "mlp_ode_ec.pth")
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
             torch.save(model.state_dict(), save_path)
             print(f"保存最佳模型，验证损失: {best_val:.6f}")
 
