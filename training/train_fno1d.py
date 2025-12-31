@@ -16,11 +16,12 @@ from data_loader import load_data_from_pkl
 def parse_args():
     parser = argparse.ArgumentParser(description="Train 1D FNO on ODE/PDE data")
     parser.add_argument("--data_dir", type=str, default=None, help="Path to directory containing .pkl files")
-    parser.add_argument("--sim_type", choices=["pde", "ode_ec", "ode_sc", "auto"], default="pde", help="Simulation type")
+    parser.add_argument("--sim_type", choices=["pde", "ode_ec", "ode_sc", "auto"], default="ode_ec", help="Simulation type")
     parser.add_argument("--T", type=int, default=None, help="Sequence length; None/<=0 keeps full length")
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--normalize", type=bool, default=True, help="Whether to normalize data")
     return parser.parse_args()
 
 def discover_pkl_files(sim_type: str, explicit_dir: pathlib.Path | None):
@@ -66,7 +67,10 @@ def main(args=None):
     data_dir, pkl_files = discover_pkl_files(sim_type, pathlib.Path(args.data_dir) if args.data_dir else None)
 
     # 根据 sim_type 设置模型保存路径
-    best_model_path = os.path.join(project_root, "results", "models", f"fno1d_{sim_type}.pth")
+    if args.normalize:
+        best_model_path = os.path.join(project_root, "results", "models", f"fno1d_{sim_type}_norm.pth")
+    else:
+        best_model_path = os.path.join(project_root, "results", "models", f"fno1d_{sim_type}.pth")
     os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
 
     all_x, all_u = [], []
@@ -82,7 +86,7 @@ def main(args=None):
     else:
         print(f"使用目录 {data_dir}, 找到 {len(pkl_files)} 个数据文件，开始加载...")
         for pkl_path in pkl_files:
-            x, u = load_data_from_pkl(pkl_path, T=T, normalize=False, sim_type=sim_type)
+            x, u = load_data_from_pkl(pkl_path, T=T, normalize=args.normalize, sim_type=sim_type)
             if x is not None and u is not None:
                 all_x.append(x)
                 all_u.append(u)

@@ -48,6 +48,7 @@ dataset/ode_ec_new_1000
 dataset/ode_sc_new_1000
 dataset/pde_surface_new_500
 /dataset/brain_simulation_data.zip
+/results/models/*.pth
 
 # 模型文件
 models/saved/*.pth

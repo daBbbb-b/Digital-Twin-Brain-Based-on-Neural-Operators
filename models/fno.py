@@ -65,13 +65,16 @@ class SpectralConv1d(nn.Module):
         # 输出 x_ft 形状: (batch, in_channels, x_grid/2 + 1)
         x_ft = torch.fft.rfft(x)
 
+        # 关键：序列较短时，rfft 频率数小于 self.modes，需要截断以避免形状不匹配
+        m = min(self.modes, x_ft.shape[-1])
+
         # 2. 频谱截断与线性变换 (Multiply relevant Fourier modes)
         # 我们只取前 'modes' 个低频系数进行计算
         out_ft = torch.zeros(batchsize, self.out_channels, x.size(-1)//2 + 1, device=x.device, dtype=torch.cfloat)
         
         # 核心操作 R * F(v)
-        weights_c = torch.view_as_complex(self.weights.to(x.device))
-        out_ft[:, :, :self.modes] = self.compl_mul1d(x_ft[:, :, :self.modes], weights_c)
+        weights_c = torch.view_as_complex(self.weights.to(x.device))[..., :m]
+        out_ft[:, :, :m] = self.compl_mul1d(x_ft[:, :, :m], weights_c)
 
         # 3. 傅里叶逆变换 (IRFFT: 复数到实数)
         # 返回物理空间

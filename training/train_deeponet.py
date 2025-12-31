@@ -25,6 +25,7 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--normalize", type=bool, default=True, help="Whether to normalize data")
     return parser.parse_args()
 
 
@@ -76,6 +77,7 @@ def train_deeponet(args=None):
     batch_size = args.batch_size
     learning_rate = args.lr
     epochs = args.epochs
+    normalize = args.normalize
 
     data_dir, pkl_files = discover_pkl_files(sim_type, args.data_dir)
 
@@ -83,7 +85,7 @@ def train_deeponet(args=None):
 
     all_x, all_y, all_u = [], [], []
     for pkl_path in pkl_files:
-        x, u = load_data_from_pkl(pkl_path, T=T, normalize=False, sim_type=sim_type)
+        x, u = load_data_from_pkl(pkl_path, T=T, normalize=normalize, sim_type=sim_type)
         if x is None or u is None:
             continue
         num_samples, _, C = x.shape
@@ -129,7 +131,10 @@ def train_deeponet(args=None):
     loss_fn = nn.MSELoss()
 
     print("开始训练 DeepONet...")
-    save_path = os.path.join(project_root, "results", "models", f"deeponet_{sim_type}.pth")
+    if args.normalize:
+        save_path = os.path.join(project_root, "results", "models", f"deeponet_{sim_type}_norm.pth")
+    else:
+        save_path = os.path.join(project_root, "results", "models", f"deeponet_{sim_type}.pth")
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     best_val = float("inf")
     for epoch in range(1, epochs + 1):
