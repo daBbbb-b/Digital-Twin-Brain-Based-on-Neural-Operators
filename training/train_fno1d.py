@@ -16,7 +16,7 @@ from data_loader import load_data_from_pkl
 def parse_args():
     parser = argparse.ArgumentParser(description="Train 1D FNO on ODE/PDE data")
     parser.add_argument("--data_dir", type=str, default=None, help="Path to directory containing .pkl files")
-    parser.add_argument("--sim_type", choices=["pde", "ode_ec", "ode_sc", "auto"], default="ode_ec", help="Simulation type")
+    parser.add_argument("--sim_type", choices=["pde", "ode_ec", "ode_sc", "auto"], default="pde", help="Simulation type")
     parser.add_argument("--T", type=int, default=None, help="Sequence length; None/<=0 keeps full length")
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--epochs", type=int, default=50)

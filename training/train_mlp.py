@@ -14,13 +14,13 @@ from data_loader import load_data_from_pkl
 def parse_args():
     parser = argparse.ArgumentParser(description="Train MLP on ODE/PDE data")
     parser.add_argument("--data_dir", type=str, default=None, help="Directory containing .pkl files")
-    parser.add_argument("--sim_type", choices=["pde", "ode_ec", "ode_sc", "auto"], default="ode_ec", help="Simulation type")
+    parser.add_argument("--sim_type", choices=["pde", "ode_ec", "ode_sc", "auto"], default="ode_sc", help="Simulation type")
     parser.add_argument("--T", type=int, default=None, help="Sequence length; None/<=0 keeps full length")
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--epochs", type=int, default=40)
     parser.add_argument("--hidden", type=int, default=128, help="Hidden dimension per layer (2 layers)")
-    parser.add_argument("--normalize", type=bool, default=True, help="Whether to normalize data")
+    parser.add_argument("--normalize", type=bool, default=False, help="Whether to normalize data")
     return parser.parse_args()
 
 
