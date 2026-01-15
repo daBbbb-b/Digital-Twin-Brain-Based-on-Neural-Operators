@@ -19,7 +19,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-
+*.zip
 # 虚拟环境
 venv/
 ENV/
