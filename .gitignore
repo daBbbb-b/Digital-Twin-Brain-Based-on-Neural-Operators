@@ -20,6 +20,10 @@ wheels/
 .installed.cfg
 *.egg
 *.zip
+*.out
+*.log
+*.aux
+*.synctex.gz
 # 虚拟环境
 venv/
 ENV/

@@ -1,0 +1,25 @@
+1、   本次作业按小组形式，自由组合小组完成一个指定的课题。每个小组准备5分钟的PPT展示，暂定12月31日（第16周）在课上安排小组课堂汇报。本次作业成绩由课堂汇报评分和提交的作业内容共同决定。
+
+2、   各小组的课题选择意向和小组成员填写至共享文档（链接：https://docs.qq.com/sheet/DU0tXTmVMZ2x4WFVr），每个小组成员人数为4或5人。填写时间截至2025年11月25日21:30。助教将根据填写的课题选择意向为每个小组分配课题，如果选择同一个课题的小组数量超过该课题的上限，则抽签决定。
+
+3、   作业提交内容包括（1）论文报告，（2）代码，（3）未在论文报告内呈现的其他补充材料，包括图片、视频和表格数据等，如文件过大可将网盘链接附在报告中。以上内容打包为zip、rar或其他常见压缩格式，文件命名为“小组编号_选题题目”。
+
+4、   一个小组提交一份报告，写明小组每位成员的姓名、学号、邮箱和在小组中的分工。
+
+5、   报告撰写格式按照常规出版物的格式要求排版整理，参考格式如下：字体小四，中文宋体，西文Times New Roman，行距1.5倍。不少于2000字，不超过40页。提交格式pdf。
+
+6、   报告内容需要包含背景，实验设计和实验方法，实验结果，讨论（结果的意义、不足和展望）。报告中哪一部分有用到他人论文里的内容，请插入引用，所有参考文献都需要罗列在最后。
+
+7、   作业提交截至时间：2026年01月26日 21:30（第20周）。
+
+8、   作业提交方式：发送至主讲教师邮箱，同时抄送三位助教。
+
+
+基于神经算子的数字大脑模型
+
+[1] Li, Z., Kovachki, N. B., Azizzadenesheli, K., Bhattacharya, K., Stuart, A., & Anandkumar, A. Fourier Neural Operator for Parametric Partial Differential Equations. In International Conference on Learning Representations.
+[2] Lu, L., Jin, P., & Karniadakis, G. E. (2019). DeepONet: Learning nonlinear operators for identifying differential equations based on the universal approximation theorem of operators. arXiv e-prints, arXiv-1910.
+[3] Zhao, Z., Li, Z., Hassibi, K., Azizzadenesheli, K., Yan, J., Bae, H. J., ... & Anandkumar, A. (2025). Physics-informed Neural-operator Predictive Control for Drag Reduction in Turbulent Flows. arXiv preprint arXiv:2510.03360.
+[4] Pang, J. C., Aquino, K. M., Oldehinkel, M., Robinson, P. A., Fulcher, B. D., Breakspear, M., & Fornito, A. (2023). Geometric constraints on human brain function. Nature, 618(7965), 566-574.
+[5] Jamison, K. W., Gu, Z., Wang, Q., Tozlu, C., Sabuncu, M. R., & Kuceyeski, A. (2025). Krakencoder: a unified brain connectome translation and fusion tool. Nature Methods, 1-10.
+[6] Luo, Z., Peng, K., Liang, Z., Cai, S., Xu, C., Li, D., ... & Liu, Q. (2025). Mapping effective connectivity by virtually perturbing a surrogate brain. Nature Methods, 1-10.
