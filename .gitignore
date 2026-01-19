@@ -24,6 +24,7 @@ wheels/
 *.log
 *.aux
 *.synctex.gz
+*.pdf
 # 虚拟环境
 venv/
 ENV/

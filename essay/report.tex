@@ -28,7 +28,6 @@
 成员三（学号，邮箱）\\
 成员四（学号，邮箱）\\
 成员五（学号，邮箱）\\
-% 若为5人小组，增加一行
 }
 \date{\today}
 
@@ -41,10 +40,116 @@
 \end{abstract}
 
 \section{背景}
-% wzy
+\subsection{数字大脑模型简介}
+“数字大脑”（Digital Twin Brain）通常指一个能够在计算机中\emph{近似复现}个体或群体大脑结构与功能的计算模型。它的核心目标不是简单地“画出大脑长什么样”，而是希望在给定结构连接（structural connectivity, SC）、有效/功能连接（effective/functional connectivity, EC/FC）以及外界刺激条件时，能够预测大脑活动如何进行变化，在实现这个之后就能够将模型用于多种途径，如大脑机制解释、疾病模拟与干预评估等。
+
+从建模角度看，数字大脑往往需要同时处理多尺度信息：微观层面的神经元/局部回路，中观层面的脑区动力学，以及宏观层面的全脑网络耦合。传统路线包括基于神经质量模型（neural mass / neural field）或生物物理方程的全脑动力学仿真，以及以数据驱动为主的统计/深度学习预测模型。前者可解释性强但参数多、计算量大并且难以针对单一个体建模；后者预测能力强但往往依赖大量数据、泛化与物理一致性不足。因而，一个现实的挑战是：如何在\emph{可解释/可控}与\emph{可学习/可泛化}之间取得平衡，并让模型能更稳定地迁移到不同个体、不同扫描条件或不同任务状态。
+
+\subsection{神经算子简介}
+神经算子（Neural Operator）是一类用神经网络去学习“从函数到函数映射”的方法。与常见的神经网络学习有限维向量到向量的映射不同，神经算子更关注连续对象：例如从初始条件、边界条件等到 PDE 的映射。直观地说，神经算子想学到的是一个“算子”，学会后就可以对新的输入条件快速推断输出，而不需要每次都进行昂贵的重新适配与训练。
+
+典型方法包括 Fourier Neural Operator（FNO）通过频域卷积在全局尺度上建模，适合表达具有较长输入的数据建模；DeepONet 通过分支网络与主干网络分别编码输入函数与查询位置，实现对算子的近似的实现。它们常被强调的一个特性是对分辨率/网格的相对“无关性”：在一定条件下，训练时与测试时的离散网格可以不同，从而更贴近“连续算子”的设定。这一点对于需要在不同空间采样或不同时间步长下工作的神经科学数据建模具有很大的价值。
+
+\subsection{使用神经算子构建数字大脑模型的好处}
+将数字大脑问题表述为算子学习问题，有助于把“从结构与状态到脑活动演化”的任务统一成一个可学习的映射框架。相比仅做短期时间序列预测的黑箱模型，神经算子更强调对函数映射的学习，这与脑仿真的目标更一致。具体而言，神经算子路线带来以下优势：
+
+\begin{itemize}
+    \item \textbf{更适合表达全局耦合与长程依赖：} 大脑是强网络耦合系统，跨脑区的相互影响往往具有非局部性。以 FNO 为代表的方法可在频域中高效建模全局交互，有利于捕捉长程的传播模式。
+    \item \textbf{对分辨率变化更鲁棒：} 神经算子面向函数空间学习，在不同时间步长/空间采样下具备更好的迁移潜力，适合处理不同被试、不同预处理管线带来的采样差异。
+\end{itemize}
+
+基于以上动机和相关论文说明，我们尝试以神经算子为模型，在结构/连接信息与时空脑活动之间建立可泛化的映射，并与基础 MLP 等模型进行对比。
 
 \section{神经算子}
-% wzy,神经算子单独剔出来讲。这部分为神经算子的介绍
+我们尝试了神经算子（FNO 1D 和 DeepONet）和传统的 MLP 神经网络。整体目标是：学习一个从“输入状态/条件”到“输出时空活动/预测量”的映射，并在不同模型之间做对照，进行比较。
+
+\subsection{FNO 1D 模型}
+\textbf{核心思路：} 将一维序列（例如时间序列或沿一维网格采样的信号）视为“函数离散采样”，模型在频域对信号进行处理：先把输入提升到较高维的隐空间表示（一个简单的前向传播），再在频域保留有限个低频模态进行学习（先转换为频域，再人为设置取前几个模态作为处理对象），从而以较低计算成本捕捉长程依赖与全局结构，最后投影回输出维度得到预测序列。
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{images/FNO1D.png}
+    \caption{FNO 1D 模型结构示意图（概念层级）}
+    \label{fig:fno_1d_structure}
+\end{figure}
+
+\textbf{优势：} 大脑相关信号常同时包含局部波动与跨区互相影响。频域截断相当于对“主要形态/主导模式”建模，既提高稳定性，也减少对噪声高频的过拟合风险。
+
+\textbf{适用场景与局限：}
+\begin{itemize}
+    \item 适合：需要建模长程依赖、全局传播模式、希望推断快且可扩展的序列/场预测任务。
+    \item 局限：对非平稳的细粒度瞬时变化可能不如专门的局部时序模型敏感；频域截断强度需要通过验证集调参。
+\end{itemize}
+
+\begin{table}[h]
+\centering
+\caption{FNO 1D 模型关键参数与作用（概念层级）}
+\begin{tabular}{@{}lll@{}}
+\toprule
+参数 & 含义 & 影响/调参直觉 \\ \midrule
+输入通道数 & 每个网格点的输入特征维度 & 与数据组织方式相关（单变量/多变量） \\
+输出通道数 & 每个网格点要预测的维度 & 与任务目标一致（回归量个数） \\
+网格点数/序列长度 & 输入序列的离散分辨率 & 影响频域分辨率与计算量 \\
+频域模态数（截断数） & 保留的低频模态数量 & 大：更细节但易过拟合；小：更平滑更稳健 \\
+隐空间宽度 & 中间表示的通道宽度 & 容量控制；过小欠拟合，过大训练更难 \\
+层数（算子层堆叠） & 频域-时域混合块的重复次数 & 更深更强表达但更易不稳定/过拟合 \\
+激活函数类型 & 非线性形式 & 影响训练稳定性与收敛速度 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{DeepONet 模型}
+\textbf{核心思路：} 将算子学习拆成两条路径：一条编码“输入函数”（例如在若干传感器位置/若干采样点处的取值或其特征表示），另一条编码“查询位置”（例如时间点或空间坐标）。两条表示在输出端进行融合，最终实现“给定输入函数，查询任意位置输出”的预测输出。
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{images/deeponet.png}
+    \caption{DeepONet 模型结构示意图（概念层级）}
+    \label{fig:deeponet_structure}
+\end{figure}
+
+\textbf{优势：} 这类结构符合“输入是函数、输出也是函数”的问题：模型不需要固定输出为整段序列，也可以在不同查询点上复用同一套输入函数表示，便于做插值/外推式的查询预测。
+
+\textbf{适用场景与局限：}
+\begin{itemize}
+    \item 适合：输入可被少量采样点（传感器）概括、输出需要在不同坐标点查询的任务；需要灵活改变查询点集合的任务。
+    \item 局限：输入采样点的选择会显著影响效果；若输入函数结构复杂而采样过少，容易信息不足。
+\end{itemize}
+
+\begin{table}[h]
+\centering
+\caption{DeepONet 模型关键参数与作用（概念层级）}
+\begin{tabular}{@{}lll@{}}
+\toprule
+参数 & 含义 & 影响/调参直觉 \\ \midrule
+传感器/采样点数量 & 输入函数用多少个点/特征来表示 & 越多信息越充分，但维度更高、训练更难 \\
+查询坐标维度 & 查询点的坐标维数（如时间/空间） & 与任务坐标定义一致 \\
+分支网络深度 & 编码输入函数的网络层数 & 深：表达强；浅：更稳更不易过拟合 \\
+主干网络深度 & 编码坐标的网络层数 & 决定对坐标变化的表达能力 \\
+隐藏层宽度 & 两条网络的中间维度 & 容量与计算的折中 \\
+输出通道数 & 输出值维度（可多通道） & 与任务目标一致 \\
+融合方式（概念） & 两条表示如何组合得到输出 & 影响可解释性与多通道扩展方式 \\ 
+激活函数类型 & 非线性形式 & 影响收敛与泛化表现 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{MLP 基础模型}
+\textbf{核心思路：} 把输入展平成固定维度向量，用多层全连接网络直接做回归/预测。用于观察不引入神经算子时，纯数据拟合能达到的基线水平。
+
+\begin{table}[h]
+\centering
+\caption{MLP 基线模型关键参数与作用（概念层级）}
+\begin{tabular}{@{}lll@{}}
+\toprule
+参数 & 含义 & 影响/调参直觉 \\ \midrule
+输入维度 & 展平/拼接后的输入特征长度 & 由数据预处理与特征组织决定 \\
+输出维度 & 预测目标向量长度 & 与任务目标一致 \\
+隐藏层层数 & 全连接层的数量 & 深度越大表达越强，但更易过拟合 \\
+每层宽度（隐藏维度） & 每层神经元数量 & 容量控制；过大训练慢、过小欠拟合 \\
+激活函数类型 & 非线性形式 & 影响优化难度与表现 \\
+正则化（可选） & 如 Dropout/权重衰减等 & 抑制过拟合，提高泛化 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \section{实验设计与实验方法}
 % 数据来源、预处理、模型结构、训练策略、评价指标等
@@ -58,7 +163,118 @@
 \subsection{仿真数据生成}
 % dbw
 \subsection{模型训练}
-% wzy
+\subsubsection{数据加载}
+
+训练数据为 \texttt{.pkl} 文件。每个样本包含一段多通道时间序列信号，以及与之对齐的刺激/输入序列（没有直接给出，需要由刺激描述重建得到）。
+
+\textbf{张量形状：} 将一段序列表示为 $(\text{Time},\ \text{Channels})$ 的矩阵；训练时整理为批量张量 $(N,\ T,\ C)$，其中 $N$ 为样本数，$T$ 为序列长度（或切片长度），$C$ 为通道数。
+
+\textbf{预处理与切分：}
+\begin{itemize}
+    \item 数值清洗：对异常值（如 NaN）进行处理，避免训练过程出现不稳定或报错。
+    \item 可选归一化：对每个通道进行 Z-score 标准化，使数据分布更加平稳。
+    \item 序列切分：长序列可按固定长度 $T$ 切分为多个样本；若选择不切分，则直接使用整段序列。本文默认设置为：ODE 数据使用 $T=1024$ 的切片；PDE 数据使用整段序列（不切分）。
+\end{itemize}
+
+\begin{table}[h]
+\centering
+\caption{数据加载与切分的关键设置（概念层级）}
+\begin{tabular}{@{}lll@{}}
+\toprule
+设置项 & 默认/取值 & 作用说明 \\ \midrule
+数据格式 & \texttt{.pkl} & 存储序列信号与刺激/输入信息 \\
+数据类型 & PDE / ODE(EC) / ODE(SC) & 影响默认序列长度与刺激构造方式 \\
+序列长度 $T$ & ODE: 1024；PDE: 不切分 & 控制是否切片及每段长度 \\
+归一化 & 是/否 & 是否对每通道做 Z-score 标准化 \\
+数值清洗 & 开启 & 处理 NaN 等异常值，保证数值稳定 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{FNO 模型训练}
+
+FNO（1D）将时间序列视为一维网格上的多通道函数，学习从信号序列到刺激/输入序列的映射：
+\[
+\mathcal{G}_{\theta}:\ \mathbf{x}(\cdot) \mapsto \mathbf{u}(\cdot).
+\]
+训练流程为：将数据整理为 $(N,\ T,\ C)$ 的批量张量，按 8:2 划分训练集与验证集；采用均方误差（MSE）作为回归损失，使用 Adam 优化；每个 epoch 在验证集上评估并保留验证误差最小的模型权重。
+
+\begin{table}[h]
+\centering
+\caption{FNO 训练设置与超参数（默认值，概念层级）}
+\begin{tabular}{@{}lll@{}}
+\toprule
+项目 & 设置/默认值 & 说明 \\ \midrule
+数据划分 & 8:2 & 随机打乱后划分训练/验证 \\
+输入/输出张量 & $(N,T,C)\rightarrow(N,T,C)$ & 输入为信号 $\mathbf{x}$，目标为刺激 $\mathbf{u}$ \\
+序列长度 $T$ & PDE: 不切分；ODE: 1024 & PDE 用整段；ODE 默认切片 \\
+损失函数 & MSE & $\|\hat{\mathbf{u}}-\mathbf{u}\|_2^2$ \\
+优化器 & Adam & 学习率见下 \\
+学习率 & $1\times10^{-3}$ & 优化器步长 \\
+批大小 & 16 & 小批量随机梯度训练 \\
+训练轮数 & 50 & 迭代轮数 \\
+频域模态数 & 32 & 低频模态保留数量 \\
+隐空间宽度 & 64 & 中间表示维度（容量控制） \\
+模型选择 & 验证集最优 & 以验证误差最小的权重为准 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{DeepONet 模型训练}
+
+DeepONet 将“输入函数”和“查询坐标”分开编码：分支网络编码输入序列（多通道信号的取值），主干网络编码查询坐标（本文使用归一化时间坐标）；两者融合后输出该坐标处的刺激/输入预测值。其目标可写为
+\[
+\hat{\mathbf{u}}(t)=\mathcal{G}_{\theta}(\mathbf{x},\ \mathbf{y}(t)).
+\]
+训练时对时间轴上的各个查询点进行监督，使用 MSE 损失与 Adam 优化，并以验证集误差最小的模型作为最终结果。
+
+\begin{table}[h]
+\centering
+\caption{DeepONet 训练设置与超参数（默认值，概念层级）}
+\begin{tabular}{@{}lll@{}}
+\toprule
+项目 & 设置/默认值 & 说明 \\ \midrule
+数据划分 & 8:2 & 以样本条数划分训练/验证 \\
+输入/输出 & $x\in\mathbb{R}^{N\times T\times C}$, $y\in\mathbb{R}^{N\times T\times d}$ & 目标为 $u\in\mathbb{R}^{N\times T\times C}$ \\
+序列长度 $T$ & PDE: 不切分；ODE: 1024 & 与数据加载保持一致 \\
+查询坐标维度 $d$ & 16 & 时间坐标的嵌入维度 \\
+分支网络深度 & 2 & 编码输入序列的层数 \\
+主干网络深度 & 2 & 编码坐标的层数 \\
+隐藏维度 & 128 & 容量控制参数 \\
+损失函数 & MSE & 点级回归 \\
+优化器 & Adam &  \\
+学习率 & $1\times10^{-3}$ &  \\
+批大小 & 8 & 小批量随机梯度训练 \\
+训练轮数 & 50 & 迭代轮数 \\
+模型选择 & 验证集最优 & 以验证误差最小的权重为准 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{MLP 模型训练}
+
+MLP 作为基线模型，不显式利用算子结构与频域归纳偏置，而是对每个时间点进行多通道回归学习。训练时将序列按时间点展开为点级样本，使用 MSE 损失与 Adam 优化；同样采用 8:2 划分训练/验证集，并以验证集误差最小的模型作为最终结果。
+
+\begin{table}[h]
+\centering
+\caption{MLP 训练设置与超参数（默认值，概念层级）}
+\begin{tabular}{@{}lll@{}}
+\toprule
+项目 & 设置/默认值 & 说明 \\ \midrule
+数据划分 & 8:2 & 在展平后的 $(NT)$ 点上划分 \\
+输入/输出 & 点级多通道回归 & 输入为信号 $\mathbf{x}$，目标为刺激 $\mathbf{u}$ \\
+序列长度 $T$ & PDE: 不切分；ODE: 1024 & 影响点级样本总数 \\
+隐藏层设置 & 两层，每层 128 & 容量控制参数 \\
+损失函数 & MSE &  \\
+优化器 & Adam &  \\
+学习率 & $1\times10^{-3}$ &  \\
+批大小 & 16 & 小批量随机梯度训练 \\
+训练轮数 & 40 & 迭代轮数 \\
+模型选择 & 验证集最优 & 以验证误差最小的权重为准 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \subsection{fMRI数据输入预测}
 % lyh
 \subsection{可视化与一致性分析}
@@ -85,8 +301,8 @@
 
 \begin{thebibliography}{99}
 % 参考文献示例（用 cite 引用）
-% \bibitem{fno} Li et al. Fourier Neural Operator for Parametric Partial Differential Equations. ICLR.
-% \bibitem{deeponet} Lu et al. DeepONet: Learning nonlinear operators for identifying differential equations based on the universal approximation theorem of operators. arXiv:1910.
+\bibitem{fno} Li, Z., Kovachki, N., Azizzadenesheli, K., Liu, B., Bhattacharya, K., Stuart, A., Anandkumar, A. (2020). Fourier neural operator for parametric partial differential equations. arXiv preprint arXiv:2010.08895.
+\bibitem{deeponet} Lu, L., Jin, P., Karniadakis, G. E. (2019). Deeponet: Learning nonlinear operators for identifying differential equations based on the universal approximation theorem of operators. arXiv preprint arXiv:1910.03193.
 \end{thebibliography}
 
 \end{document}
