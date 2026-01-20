@@ -25,7 +25,7 @@
 \author{\textbf{小组成员信息}\\
 邓博文（2023K8009910008，dengbowen23@mails.ucas.ac.cn）\\
 王子逸（2023K8009991010，wangziyi236@mails.ucas.ac.cn）\\
-成员三（学号，邮箱）\\
+周正凯（2023K8009991019，zhouzhengkai23@mails.ucas.ac.cn）\\
 成员四（学号，邮箱）\\
 成员五（学号，邮箱）\\
 }
@@ -157,7 +157,56 @@
 \subsubsection{结构连接矩阵}
 % dbw
 \subsubsection{有效连接矩阵}
-% zzk：如何计算功能连接矩阵。原理和步骤。附上论文引用。
+有效连接（Effective Connectivity, EC）旨在刻画脑区之间\textbf{有方向性}、可解释为“因果影响”的相互作用强度。本文采用 Luo 等在 Nature Methods 提出的 NPI（Neural Perturbation Inference）框架：先训练一个能够复现统计连接结构的“代理大脑”（surrogate brain），再对该代理模型进行\textbf{虚拟扰动}以得到有向 EC 矩阵\cite{npi}。在推断 EC 前，我们先计算经验功能连接（Functional Connectivity, FC）用于训练监控与一致性验证。
+
+\noindent\textbf{(1) 经验功能连接矩阵（FC）计算：}
+对每个被试的每个 run，我们首先将体素级 fMRI 信号映射到 ROI 级时间序列：使用 BNA 246 分区图谱对齐到 fMRI 标准空间（MNI152NLin2009cAsym），并对每个 ROI 内体素时间序列取均值，得到
+\[
+\mathbf{X}\in\mathbb{R}^{T\times N},\quad N=246,
+\]
+其中 $T$ 为时间点数，$N$ 为脑区数。经验 FC 采用 Pearson 相关系数计算：
+\[
+FC_{ij}=\frac{\mathrm{cov}(x_i,x_j)}{\sigma_{x_i}\sigma_{x_j}},
+\]
+其中 $x_i,x_j$ 分别表示第 $i/j$ 个脑区的 ROI 时间序列。由此得到对称矩阵 $FC\in\mathbb{R}^{N\times N}$，对角线为 1，反映脑区间的统计相关性结构。
+
+\noindent\textbf{(2) 代理大脑训练（NPI 的 surrogate brain）：}
+NPI 的核心是训练一个可递归生成序列的预测模型，使其产生的模拟信号在统计意义上复现经验 FC\cite{npi}。本文采用多层感知机（MLP）作为代理模型，使用多步到一步的输入输出形式：
+\[
+\hat{\mathbf{x}}_{t+1}=f_{\theta}\!\left(\mathbf{x}_{t},\mathbf{x}_{t-1},\mathbf{x}_{t-2}\right),
+\]
+即输入为连续 3 个时间点（steps=3）的脑区状态，输出为下一时间点的脑区状态。训练目标为最小化单步预测均方误差（MSE）：
+\[
+\mathcal{L}(\theta)=\left\| f_{\theta}(\mathbf{x}_{t},\mathbf{x}_{t-1},\mathbf{x}_{t-2})-\mathbf{x}_{t+1}\right\|_2^2 .
+\]
+训练完成后，将模型输出递归反馈作为下一步输入，可生成较长的模拟时间序列，并计算其 $FC_{\text{sim}}$ 与经验 $FC_{\text{emp}}$ 的相关性作为一致性检查指标（论文中以较高相关作为“代理大脑”有效性的判据\cite{npi}）。
+
+\noindent\textbf{(3) 虚拟扰动与 EC 推断：}
+在代理模型上对每个脑区施加脉冲扰动以估计其对其他脑区的有向影响\cite{npi}。对第 $i$ 个脑区，在时刻 $t$ 的输入 $\mathbf{x}_t$ 上加入扰动：
+\[
+\mathbf{x}_t'=\mathbf{x}_t+\Delta_i \mathbf{e}_i,
+\]
+其中 $\mathbf{e}_i$ 为第 $i$ 维为 1 的单位向量，扰动强度 $\Delta_i$ 取该脑区时间序列标准差的一半（兼顾扰动可检测性与模型稳定性）。分别计算基线预测与扰动预测：
+\[
+\hat{\mathbf{x}}^{\text{base}}_{t+1}=f_{\theta}(\mathbf{x}_{t},\mathbf{x}_{t-1},\mathbf{x}_{t-2}),\quad
+\hat{\mathbf{x}}^{\text{pert}}_{t+1}=f_{\theta}(\mathbf{x}'_{t},\mathbf{x}_{t-1},\mathbf{x}_{t-2}),
+\]
+并取差值响应
+\[
+\Delta\mathbf{x}_{t+1}^{(i)}=\hat{\mathbf{x}}^{\text{pert}}_{t+1}-\hat{\mathbf{x}}^{\text{base}}_{t+1}.
+\]
+对所有时间点的响应进行平均（或稳健统计聚合），即可得到第 $i$ 个脑区对所有目标脑区的平均影响强度，从而构造有向矩阵
+\[
+EC_{ij}=\mathbb{E}_t\left[\Delta x^{(i)}_{t+1,j}\right],\quad EC\in\mathbb{R}^{N\times N},
+\]
+其中 $EC_{ij}$ 表示“脑区 $i$ 影响脑区 $j$”的方向性作用，正/负号可对应兴奋/抑制效应（在代理动力学的意义下）。
+
+\noindent\textbf{(4) 结构连接约束（SC mask）：}
+为保证 EC 的解剖合理性，我们使用二值结构连接矩阵 $SC\in\{0,1\}^{N\times N}$ 作为掩膜（mask），将无结构连边处的 EC 置零：
+\[
+EC \leftarrow EC\odot SC,
+\]
+其中 $\odot$ 表示逐元素乘法。最终得到满足结构约束的有向 EC 矩阵用于后续分析。
 \subsubsection{皮层表面拉普拉斯算子}
 % dbw
 \subsection{仿真数据生成}
@@ -296,13 +345,14 @@ MLP 作为基线模型，不显式利用算子结构与频域归纳偏置，而�
 \begin{itemize}
     \item 邓博文：整体分工与进度把控；数据下载；仿真数据生成。
     \item 王子逸：进行模型设计与训练；设计基础模型mlp，神经算子模型fno，deeponet等并进行对比实验；设计实验报告模板并加入编辑报告。
-    \item 
+    \item 周正凯：连接矩阵计算；模型训练代码编写与调试；实验结果可视化与分析。
 \end{itemize}
 
 \begin{thebibliography}{99}
 % 参考文献示例（用 cite 引用）
 \bibitem{fno} Li, Z., Kovachki, N., Azizzadenesheli, K., Liu, B., Bhattacharya, K., Stuart, A., Anandkumar, A. (2020). Fourier neural operator for parametric partial differential equations. arXiv preprint arXiv:2010.08895.
 \bibitem{deeponet} Lu, L., Jin, P., Karniadakis, G. E. (2019). Deeponet: Learning nonlinear operators for identifying differential equations based on the universal approximation theorem of operators. arXiv preprint arXiv:1910.03193.
+\bibitem{npi} Luo, Z., Peng, K., Liang, Z., Cai, S., Xu, C., Li, D., ... \& Liu, Q. (2025). Mapping effective connectivity by virtually perturbing a surrogate brain. \emph{Nature Methods}, 1--10.
 \end{thebibliography}
 
 \end{document}
