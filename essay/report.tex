@@ -27,7 +27,7 @@
 邓博文（2023K8009910008，dengbowen23@mails.ucas.ac.cn）\\
 王子逸（2023K8009991010，wangziyi236@mails.ucas.ac.cn）\\
 周正凯（2023K8009991019，zhouzhengkai23@mails.ucas.ac.cn）\\
-李逸晗（学号，邮箱）\\
+李逸晗（2023K8009991009，liyihan231@mails.ucas.ac.cn）\\
 李德琪（2023K8009991020，lideqi23@mails.ucas.ac.cn）\\
 }
 \date{\today}
@@ -427,8 +427,50 @@ MLP 作为基线模型，不显式利用算子结构与频域归纳偏置，而�
 \end{tabular}
 \end{table}
 
+
+
 \subsection{fMRI数据输入预测}
-% lyh
+%lyh
+为了验证神经算子模型在真实生物数据上的反演能力，我们将训练好的 FNO 模型迁移至真实 fMRI 数据应用中。由于真实数据的采集参数与仿真环境存在差异，我们设计了一套完整的预处理与推理适配流程。
+
+\subsubsection{数据预处理}
+\paragraph{空间降维与信号提取}
+原始 fMRI 数据为 4D NIfTI 格式（$x, y, z, t$），体素数量巨大且包含大量背景噪声。为了与网络动力学模型（ODE-SC/EC）的节点定义保持一致，我们采用基于图谱的感兴趣区（ROI）提取策略。
+具体而言，我们使用 \texttt{nilearn} 库的 \texttt{NiftiLabelsMasker} 工具，配合 Brainnetome Atlas 246 (BNA) 图谱（\texttt{BN\_Atlas\_246\_1mm.nii.gz}）对原始 fMRI 影像进行掩膜处理。对于图谱定义的 246 个脑区，计算区域内所有体素的平均强度作为该节点的 BOLD 信号。
+此外，针对基于 PDE 的皮层表面模型，我们也尝试了基于左半球表面文件（\texttt{sub-01\_hemi-L\_midthickness.surf.gii}）的顶点级信号提取，但为统一实验分析维度，本报告主要展示基于 BNA 246 脑区级数据的反演结果。
+提取后的时间序列经过清洗（去除 NaN 值）后序列化保存为 \texttt{.pkl} 格式，作为模型的标准输入。
+
+\subsubsection{训练数据修正与模型调优}
+在初步实验中，我们直接使用基准 FNO 模型对真实数据进行反演，发现输出的潜在刺激 $u(t)$ 呈现为无波动的“死线”。经排查，原仿真训练集中的 BOLD 信号缺乏足够的动态变化范围，导致模型收敛于平均值映射。
+为此，我们优化了模型的仿真参数，重新生成了覆盖更广动态范围的高质量 BOLD-Stimulus 数据对，并重新训练了 FNO 模型。此外，为了保持真实信号的物理幅值特性，我们在推理阶段\textbf{未对输入数据进行 Z-score 归一化}，而是直接使用原始 BOLD 幅值，使其与仿真数据的分布特性保持一致。这一调整显著改善了反演结果，使模型能够输出具备生理合理性的波动信号。
+
+\subsubsection{推理策略与时空适配}
+\paragraph{时序重采样}
+真实 fMRI 数据的重复时间（TR）通常为 2.0s，而神经算子模型是在 $dt=0.05s$ 的高频仿真数据上训练的。为解决时间分辨率的不匹配，我们采用线性插值（Linear Interpolation）将真实 BOLD 信号升采样至 0.05s 间隔。虽然这在一定程度上引入了平滑误差，但保证了输入数据在时域尺度上适配神经算子对高频动力学的捕捉需求。
+
+\paragraph{Look-back 拼接策略}
+由于 FNO 模型的输入窗口长度固定为 $T=1024$（约 51.2s），而真实 fMRI 扫描的时长通常远大于此（560s），我们需要将长序列切分为多个窗口进行推理。
+常规的“补零填充（Zero-padding）”策略在处理序列尾部不足一个窗口的数据时，会导致 FNO 模型（基于频域全局特性）在边缘处产生剧烈的吉布斯震荡（Gibbs Phenomenon）和伪影，严重影响反演质量。
+
+为此，我们提出并实施了\textbf{“回退截取（Look-back）”策略}。具体逻辑为：
+\begin{enumerate}
+    \item 对于序列的前半部分，按步长 $T$ 正常切分窗口进行推理；
+    \item 当处理最后一段长度不足 $T$ 的数据时，\textbf{不进行补零}，而是从序列末尾向前回溯，截取一个完整的 $T=1024$ 长度的窗口输入模型；
+    \item 在获取该窗口的输出后，仅截取对应尾部的新增时间步拼接到总结果中。
+\end{enumerate}
+
+如图所示，该策略成功消除了拼接处的数据突变与边缘震荡，保证了全时段反演信号的平滑性和连续性，有效解决了长程 fMRI 信号的推理难题。
+
+\begin{figure}[h]
+    \centering
+    % 请确保将图片重命名为 fno_tail_strategy.png 并放在 images 文件夹下
+    \includegraphics[width=0.8\textwidth]{images/fno_tail_strategy.png}
+    \caption{Look-back 策略效果示例：红色虚线标识了回退截取窗口的起始位置。该策略保证了在序列尾部模型依然能接收到完整的时序上下文，从而输出平滑且连续的反演结果（Inferred u），避免了传统补零带来的边缘震荡。}
+    \label{fig:lookback_strategy}
+\end{figure}
+
+
+
 \subsection{可视化与一致性分析}
 为验证模型输出与真实脑活动的匹配程度，我们从时间维度和空间维度开展可视化分析，并通过相关性量化一致性水平。
 
