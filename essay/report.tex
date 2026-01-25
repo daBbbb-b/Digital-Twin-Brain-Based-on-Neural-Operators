@@ -12,6 +12,8 @@
 \geometry{left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm}
 \usepackage{setspace}
 \onehalfspacing
+\usepackage{indentfirst} % 引入该宏包可让章节首段自动缩进
+
 \setlength{\parindent}{2em}
 % ---------- Common Packages ----------
 \usepackage{graphicx}
@@ -20,10 +22,9 @@
 \usepackage{hyperref}
 \usepackage{cite}
 
-
 % ---------- Title Info ----------
 \title{基于神经算子的数字大脑模型}
-\author{\textbf{小组成员信息}\\
+\author{\textbf{第8组}\\
 邓博文（2023K8009910008，dengbowen23@mails.ucas.ac.cn）\\
 王子逸（2023K8009991010，wangziyi236@mails.ucas.ac.cn）\\
 周正凯（2023K8009991019，zhouzhengkai23@mails.ucas.ac.cn）\\
@@ -38,9 +39,9 @@
 
 \begin{abstract}
 
-本文探索利用神经算子构建数字大脑模型。我们基于结构连接（SC）和通过神经扰动推断得到的有效连接（EC）以及MNI 空间皮层表面拉普拉斯算子，利用神经动力学方程（ODE与PDE）生成了包含明确基准真值的仿真数据集。我们分别构建并训练了傅里叶神经算子（FNO）、DeepONet以及多层感知机（MLP）模型，模型训练目标为学习从fMRI BOLD数据到外部输入刺激的反演映射。
+本文探索利用神经算子构建数字大脑模型。我们基于结构连接（SC）和通过神经扰动推断得到的有效连接（EC）以及MNI 空间皮层表面拉普拉斯算子，利用神经动力学方程（ODE为E-I模型与PDE为神经波动模型）生成了仿真数据集。我们分别构建并训练了傅里叶神经算子（FNO）、DeepONet以及多层感知机（MLP）模型，模型训练目标为学习从fMRI BOLD数据到刺激的反演映射。
 
-我们将训练好的模型迁移至真实fMRI数据应用中，尝试反演103个任务下的潜在刺激模式，并通过对比反演刺激图谱与经验功能激活图谱来评估模型性能。实验结果表明，当前模型反演的刺激分布与真实特定任务的fMRI BOLD数据之间相关性较低。我们最后从仿真数据覆盖度、信号预处理差异、BOLD血氧动力学滞后性等角度深入分析了差异原因，并提出了丰富仿真范式、优化数据处理流程等改进策略。
+我们将训练好的模型（测试了用ODE数据集训练的FNO模型）迁移至真实fMRI数据应用中，尝试反演103个任务下的潜在刺激模式，并通过对比反演刺激图谱与经验功能激活图谱来评估模型性能。实验结果表明，当前模型反演的刺激分布与真实特定任务的fMRI BOLD数据之间相关性较低。我们最后从仿真数据覆盖度、信号预处理差异、模型训练目标、BOLD血氧动力学滞后性等角度尝试分析了差异原因，并提出了丰富仿真范式、优化数据处理流程等改进策略。
 \end{abstract}
 
 \newpage
@@ -244,11 +245,13 @@ EC \leftarrow EC\odot SC,
 \subsection{仿真数据生成}
 为了构建具有明确基准真值的数据集以训练神经算子，我们利用神经动力学方程生成了包含结构/有效连接约束的大规模仿真数据。仿真涵盖了基于 ODE 的宏观网络模型和基于 PDE 的皮层连续场模型。
 
+最终生成数据集包含1000个基于EC的ODE仿真样本，1000个基于SC的ODE仿真样本，以及500个基于拉普拉斯算子的PDE仿真样本。每个样本均包含输入刺激信号与对应的BOLD响应时间序列，供神经算子模型训练使用。
+
 \subsubsection{多样化刺激生成与 BOLD 信号转换}
 为了训练神经算子学习从神经活动到输入刺激的反演映射，我们构建了一个能够生成复杂时空模式的刺激生成器。
 \begin{itemize}
     \item \textbf{刺激模式：} 包含三种波形：(1) \textbf{Boxcar}：模拟持续性任务激活；(2) \textbf{Impulse}：模拟稀疏事件相关刺激；(3) \textbf{Continuous}：混合正弦波模拟自然持续信号。
-    \item \textbf{观测模型：} 仿真得到的神经活动通过 Balloon-Windkessel 血氧动力学模型转换为 BOLD 信号，该模型包含非线性微分方程组，描述了血流、血容积及脱氧血红蛋白含量的动态变化。
+    \item \textbf{观测模型：} 仿真得到的神经活动通过 Balloon-Windkessel 血氧动力学模型转换为 BOLD 信号，该模型包含非线性微分方程组，描述了血流、血容积及脱氧血红蛋白含量的动态变化\cite{dcm}。
 \end{itemize}
 \subsubsection{基于 ODE 的网络动力学仿真}
 对于基于脑区划分（ROI）的微观/宏观动力学，我们采用经典的 Reduced Wong-Wang (EI) 模型\cite{deco2014}。该模型通过平均场近似描述了每个脑区内兴奋性（E）和抑制性（I）神经元群体的突触门控变量动态。
@@ -268,13 +271,13 @@ EC \leftarrow EC\odot SC,
 \textbf{参数设置：} 时间常数 $\tau_E=100$ ms, $\tau_I=10$ ms；全局耦合强度 $G=0.5$；数值积分步长 $dt=0.5$ ms。我们在两种连接矩阵上生成数据：(1) \textbf{ODE-SC}：使用组平均白质结构连接矩阵；(2) \textbf{ODE-EC}：使用 NPI 推断得到的有效连接矩阵。
 \begin{figure}[h]
     \centering
-    \includegraphics[width=0.8\textwidth]{images/stimulus1.png}
+    \includegraphics[width=0.6\textwidth]{images/stimulus1.png}
     \caption{ODE:刺激信号示例}
     \label{fig:ode_stimulus}
 \end{figure}
 \begin{figure}[h]
     \centering
-    \includegraphics[width=0.8\textwidth]{images/data_ode.png}
+    \includegraphics[width=0.6\textwidth]{images/data_ode.png}
     \caption{ODE:fMRI仿真数据示例}
     \label{fig:ode_simulation}
 \end{figure}
@@ -282,7 +285,7 @@ EC \leftarrow EC\odot SC,
 \subsubsection{基于 PDE 的皮层波动力学仿真}
 为了模拟皮层表面的连续时空神经活动，我们采用定义在流形上的阻尼波动方程，该方程能够生成具有有限传播速度的行波模式，符合皮层神经场理论。
 
-\textbf{动力学方程：} 定义皮层神经场活动 $u(\mathbf{x}, t)$，其演化方程为：
+\textbf{动力学方程：} 定义皮层神经场活动 $u(\mathbf{x}, t)$\cite{g}，其演化方程为：
 \[
 \frac{\partial^2 u}{\partial t^2} + \gamma \frac{\partial u}{\partial t} + c^2 \Delta_{\mathcal{M}} u = \alpha \sigma(u) + I_{stim}(\mathbf{x}, t) + \xi(\mathbf{x}, t)
 \]
@@ -298,26 +301,33 @@ EC \leftarrow EC\odot SC,
 
 \begin{figure}[h]
     \centering
-    \includegraphics[width=0.8\textwidth]{images/stimulus_pde.png}
+    \includegraphics[width=0.6\textwidth]{images/stimulus_pde.png}
     \caption{PDE:刺激信号示例}
     \label{fig:pde_stimulus}
 \end{figure}
 \begin{figure}[h]
     \centering
-    \includegraphics[width=0.8\textwidth]{images/stimulus_pde2.png}
+    \includegraphics[width=0.6\textwidth]{images/stimulus_pde2.png}
     \caption{PDE:刺激信号空间分布示例}
     \label{fig:pde_stimulus2}
 \end{figure}
 \begin{figure}[h]
     \centering
-    \includegraphics[width=0.\textwidth]{images/data_pde.png}
+    \includegraphics[width=0.6\textwidth]{images/data_pde.png}
     \caption{PDE:fMRI仿真数据示例}
     \label{fig:pde_simulation}
 \end{figure}
 \subsection{模型训练}
+我们训练了9个模型：
+\begin{itemize}
+    \item FNO 1D：分别在 PDE、ODE-EC、ODE-SC 数据集上训练3个模型。
+    \item DeepONet：分别在 PDE、ODE-EC、ODE-SC 数据集上训练3个模型。
+    \item MLP 基线模型：分别在 PDE、ODE-EC、ODE-SC 数据集上训练3个模型。
+\end{itemize}
+
 \subsubsection{数据加载}
 
-训练数据为 \texttt{.pkl} 文件。每个样本包含一段多通道时间序列信号，以及与之对齐的刺激/输入序列（没有直接给出，需要由刺激描述重建得到）。
+训练数据为 \texttt{.pkl} 文件。每个样本包含一段多通道时间fMRI BOLD序列信号，以及与之对齐的刺激/输入序列。
 
 \textbf{张量形状：} 将一段序列表示为 $(\text{Time},\ \text{Channels})$ 的矩阵；训练时整理为批量张量 $(N,\ T,\ C)$，其中 $N$ 为样本数，$T$ 为序列长度（或切片长度），$C$ 为通道数。
 
@@ -429,30 +439,31 @@ MLP 作为基线模型，不显式利用算子结构与频域归纳偏置，而�
 
 
 
-\subsection{fMRI数据输入预测}
-%lyh
+\subsection{反演任务：由fMRI数据输入预测刺激}
+反演任务中，我们仅测试了基于EC的ODE仿真数据训练的 FNO 模型、基于SC的ODE仿真数据训练的 FNO 模型，以及使用PDE仿真数据集训练的 FNO 模型。
+
 为了验证神经算子模型在真实生物数据上的反演能力，我们将训练好的 FNO 模型迁移至真实 fMRI 数据应用中。由于真实数据的采集参数与仿真环境存在差异，我们设计了一套完整的预处理与推理适配流程。
 
 \subsubsection{数据预处理}
-\paragraph{空间降维与信号提取}
-原始 fMRI 数据为 4D NIfTI 格式（$x, y, z, t$），体素数量巨大且包含大量背景噪声。为了与网络动力学模型（ODE-SC/EC）的节点定义保持一致，我们采用基于图谱的感兴趣区（ROI）提取策略。
-具体而言，我们使用 \texttt{nilearn} 库的 \texttt{NiftiLabelsMasker} 工具，配合 Brainnetome Atlas 246 (BNA) 图谱（\texttt{BN\_Atlas\_246\_1mm.nii.gz}）对原始 fMRI 影像进行掩膜处理。对于图谱定义的 246 个脑区，计算区域内所有体素的平均强度作为该节点的 BOLD 信号。
-此外，针对基于 PDE 的皮层表面模型，我们也尝试了基于左半球表面文件（\texttt{sub-01\_hemi-L\_midthickness.surf.gii}）的顶点级信号提取，但为统一实验分析维度，本报告主要展示基于 BNA 246 脑区级数据的反演结果。
-提取后的时间序列经过清洗（去除 NaN 值）后序列化保存为 \texttt{.pkl} 格式，作为模型的标准输入。
+
+原始 fMRI 数据为 4D NIfTI 格式（$x, y, z, t$），体素数量巨大且包含大量背景噪声。为了与网络动力学模型（ODE-SC/EC）的节点定义保持一致，我们首先将体素级信号映射至 ROI 级时间序列。
+
+使用 \texttt{nilearn} 库的 \texttt{NiftiLabelsMasker} 工具，配合 Brainnetome Atlas 246 (BNA) 图谱（\texttt{BN\_Atlas\_246\_1mm.nii.gz}）对原始 fMRI 影像进行掩膜处理。对于图谱定义的 246 个脑区，计算区域内所有体素的平均强度作为该节点的 BOLD 信号。
 
 \subsubsection{训练数据修正与模型调优}
-在初步实验中，我们直接使用基准 FNO 模型对真实数据进行反演，发现输出的潜在刺激 $u(t)$ 呈现为无波动的“死线”。经排查，原仿真训练集中的 BOLD 信号缺乏足够的动态变化范围，导致模型收敛于平均值映射。
+在初步实验中，我们直接使用 FNO 模型对真实数据进行反演，发现输出的潜在刺激 $u(t)$ 呈现为无波动的“死线”。经排查，原仿真训练集中的 BOLD 信号缺乏足够的动态变化范围，导致模型收敛于平均值映射。
+
 为此，我们优化了模型的仿真参数，重新生成了覆盖更广动态范围的高质量 BOLD-Stimulus 数据对，并重新训练了 FNO 模型。此外，为了保持真实信号的物理幅值特性，我们在推理阶段\textbf{未对输入数据进行 Z-score 归一化}，而是直接使用原始 BOLD 幅值，使其与仿真数据的分布特性保持一致。这一调整显著改善了反演结果，使模型能够输出具备生理合理性的波动信号。
 
 \subsubsection{推理策略与时空适配}
-\paragraph{时序重采样}
-真实 fMRI 数据的重复时间（TR）通常为 2.0s，而神经算子模型是在 $dt=0.05s$ 的高频仿真数据上训练的。为解决时间分辨率的不匹配，我们采用线性插值（Linear Interpolation）将真实 BOLD 信号升采样至 0.05s 间隔。虽然这在一定程度上引入了平滑误差，但保证了输入数据在时域尺度上适配神经算子对高频动力学的捕捉需求。
+\paragraph{\textbf{时序重采样}}
+真实 fMRI 数据的重复时间（TR）通常为 2.0s，而神经算子模型是在 $dt=0.05s$ 的高频仿真数据上训练的。为解决时间分辨率的不匹配，我们采用线性插值将真实 BOLD 信号升采样至 0.05s 间隔。虽然这在一定程度上引入了平滑误差，但保证了输入数据在时域尺度上适配神经算子对高频动力学的捕捉需求。
 
-\paragraph{Look-back 拼接策略}
-由于 FNO 模型的输入窗口长度固定为 $T=1024$（约 51.2s），而真实 fMRI 扫描的时长通常远大于此（560s），我们需要将长序列切分为多个窗口进行推理。
-常规的“补零填充（Zero-padding）”策略在处理序列尾部不足一个窗口的数据时，会导致 FNO 模型（基于频域全局特性）在边缘处产生剧烈的吉布斯震荡（Gibbs Phenomenon）和伪影，严重影响反演质量。
+\paragraph{\textbf{Look-back 拼接策略}}
+由于 FNO 模型的输入窗口长度固定为 $T=1024$（ 51.2s），而真实 fMRI 扫描的时长通常远大于此（560s），我们需要将长序列切分为多个窗口进行推理。
+常规的“补零填充（Zero-padding）”策略在处理序列尾部不足一个窗口的数据时，会导致 FNO 模型（基于频域全局特性）在边缘处产生剧烈的吉布斯震荡和伪影，严重影响反演质量。
 
-为此，我们提出并实施了\textbf{“回退截取（Look-back）”策略}。具体逻辑为：
+为此，我们实施了\textbf{“回退截取”策略}。具体逻辑为：
 \begin{enumerate}
     \item 对于序列的前半部分，按步长 $T$ 正常切分窗口进行推理；
     \item 当处理最后一段长度不足 $T$ 的数据时，\textbf{不进行补零}，而是从序列末尾向前回溯，截取一个完整的 $T=1024$ 长度的窗口输入模型；
@@ -472,6 +483,8 @@ MLP 作为基线模型，不显式利用算子结构与频域归纳偏置，而�
 
 
 \subsection{可视化与一致性分析}
+可视化部分我们对基于EC的ODE仿真数据训练的 FNO 模型反演结果和基于SC的ODE仿真数据训练的 FNO 模型反演结果进行可视化分析。
+
 为验证模型输出与真实脑活动的匹配程度，我们从时间维度和空间维度开展可视化分析，并通过相关性量化一致性水平。
 
 \subsubsection{可视化方法}
@@ -539,7 +552,7 @@ MLP 作为基线模型，不显式利用算子结构与频域归纳偏置，而�
 \begin{itemize}
     \item \textbf{连接矩阵}：EC矩阵和SC矩阵均使用相同的E-I方程进行仿真，但两种矩阵的数值差异可能造成一定影响，导致基于EC和SC训练的神经算子反演结果相似度较低。
     \item \textbf{仿真数据}：模拟刺激种类有限，当前只考虑了三种刺激，仅使用了简单的白噪声；刺激作用的脑区为随机选择的1-5个脑区，本实验希望通过增加仿真数据量实现全脑区和不同组合脑区的覆盖，但仅1000组仿真数据无法实现不同组合脑区组合的全覆盖；仿真数据的动力学方程参数设置可能与真实大脑动力学差异较大，导致生成的BOLD信号与真实信号在统计特性上存在偏差，并且随着时间累计差异进一步增大。
-    \item \textbf{模型训练}：神经算子模型的超参数设置（如隐空间宽度、频域模态数等）可能未能充分挖掘数据中的潜在模式，导致模型表达能力不足；训练轮数较少可能未能使模型充分收敛，影响预测性能。
+    \item \textbf{模型训练}：模型直接进行反演任务可能是一个病态任务，反演本身已经颠倒了因果（正确应该为刺激为因，神经信号为果），反演任务的正确性有待进一步验证；神经算子模型的超参数设置（如隐空间宽度、频域模态数等）可能未能充分挖掘数据中的潜在模式，导致模型表达能力不足；训练轮数较少可能未能使模型充分收敛，影响预测性能。
     \item \textbf{fMRi数据反演}：真实fMRI数据为低频(2s)采样信号,当前通过简单线性插值恢复到高频(0.5ms)信号，插值方法可能未能有效捕捉真实信号的动态特性，影响模型输入的质量；fMRI BOLD 信号天然包含生理噪声与扫描设备噪声，模型在反演是没有对这类非任务相关噪声进行处理。
     \item \textbf{一致性分析}：刺激图谱使用刺激信号，真实图谱使用BOLD信号，BOLD信号一般存在滞后效应，二者在时间上存在偏移，直接计算空间相关性可能低估了真实一致性水平；当前的刺激图谱和真实功能图谱均采用简单的均值差分计算，可能未能充分捕捉复杂的任务相关激活模式，影响一致性评估的准确性。
 \end{itemize}
@@ -550,8 +563,14 @@ MLP 作为基线模型，不显式利用算子结构与频域归纳偏置，而�
     \item \textbf{优化模型训练}：调整神经算子模型的超参数，如增加隐空间宽度和频域模态数，以提升模型的表达能力；增加训练轮数，确保模型充分收敛；尝试不同的优化器和学习率调度策略，以改善训练过程。
     \item \textbf{改进fMRI数据处理}：采用更先进的插值方法，如基于小波变换或深度学习的方法，以更准确地恢复高频信号特性；在反演前对fMRI数据进行更细致的预处理，减弱生理噪声和扫描设备噪声，提高输入数据质量。
     \item \textbf{完善一致性分析}：考虑BOLD信号的滞后效应，在计算空间相关性时引入时间偏移校正；采用更复杂的功能图谱计算方法，如GLM分析等，以更准确地捕捉任务相关激活模式，提高一致性评估的准确性。    
+    \item \textbf{完善模型探索}：本次任务由于时间有限的原因，我们虽然在不同数据集上训练好的FNO、DeepONet和MLP模型，但只使用了FNO模型进行反演任务。后续可以尝试使用DeepONet和MLP模型进行反演任务，并对比不同模型的反演效果，从而选择最优的神经算子架构。
 \end{itemize}
 
+\section{总结}
+
+\indent 本文初步探索了将神经算子技术应用于数字大脑建模及大脑状态反演的可行性,测试了神经算子的分辨率无关、泛化能力强的特性。通过构建包含微观网络动力学与宏观皮层波动的多尺度仿真数据集，我们训练了 FNO 等算子模型，并建立了一套从神经动力学仿真到真实 fMRI 数据反演的完整实验流水线。尽管目前的实验结果显示，基于简化仿真数据训练的模型在迁移至真实大脑环境时，其反演的潜在刺激分布与经验功能激活图谱远未达到理想的统计一致性，但我们尝试从多个角度分析了可能的影响因素，并提出了一些后续可能的改进方式。
+
+最后，感谢刘一男助教的帮助，感谢其他小组的合作交流，感谢组员的通力合作。我们尝试了一个全新领域的小课题，搭建了完整的流水线，虽然结果未达预期，但也在实验过程中发现了一些值得进一步改进和探究的地方。
 
 \subsection{分工}
 \begin{itemize}
@@ -562,11 +581,59 @@ MLP 作为基线模型，不显式利用算子结构与频域归纳偏置，而�
     \item 李德琪：实验结果可视化；一致性分析。
 \end{itemize}
 
+
+
 \begin{thebibliography}{99}
 % 参考文献示例（用 cite 引用）
 \bibitem{fno} Li, Z., Kovachki, N., Azizzadenesheli, K., Liu, B., Bhattacharya, K., Stuart, A., Anandkumar, A. (2020). Fourier neural operator for parametric partial differential equations. arXiv preprint arXiv:2010.08895.
 \bibitem{deeponet} Lu, L., Jin, P., Karniadakis, G. E. (2019). Deeponet: Learning nonlinear operators for identifying differential equations based on the universal approximation theorem of operators. arXiv preprint arXiv:1910.03193.
 \bibitem{npi} Luo, Z., Peng, K., Liang, Z., Cai, S., Xu, C., Li, D., ... \& Liu, Q. (2025). Mapping effective connectivity by virtually perturbing a surrogate brain. \emph{Nature Methods}, 1--10.
+\bibitem{dcm} Friston, K. J., Harrison, L., \& Penny, W. (2003). Dynamic causal modelling. Neuroimage, 19(4), 1273-1302
+\bibitem{g} Pang, J. C., Aquino, K. M., Oldehinkel, M., Robinson, P. A., Fulcher, B. D., Breakspear, M., \& Fornito, A. (2023). Geometric constraints on human brain function. Nature, 618(7965), 566-574.
 \end{thebibliography}
 
+\appendix
+\section{附录：代码文件说明}
+
+存放于code/文件夹，主要文件目录结构及其功能说明如下：
+
+\subsection*{1. 模型定义模块 (models/)}
+该文件夹包含本报告中对比实验所涉及的三种神经网络架构的底层实现：
+\begin{itemize}
+    \item \texttt{fno.py}：傅里叶神经算子（FNO 1D）模型实现。代码定义了基于快速傅里叶变换（FFT）的谱卷积层，用于提取神经信号的频域特征。
+    \item \texttt{deeponet.py}：DeepONet 模型实现。包含用于编码输入函数的分支网络（Branch Net）和编码查询坐标的主干网络（Trunk Net）。
+    \item \texttt{mlp.py}：多层感知机（MLP）基线模型实现。
+\end{itemize}
+
+\subsection*{2. 动力学仿真模块 (simulation/ \& dynamics/)}
+用于基于生物物理方程生成包含基准真值（Ground Truth）的仿真数据集：
+\begin{itemize}
+    \item \texttt{simulation/ode\_simulator.py}：基于 SC/EC 连接矩阵的宏观网络动力学仿真器，集成了 Reduced Wong-Wang 模型的数值积分过程。
+    \item \texttt{simulation/pde\_simulator.py}：基于皮层表面流形的 PDE 神经场仿真器，实现了利用拉普拉斯算子计算空间扩散的过程。
+    \item \texttt{simulation/stimulation\_generator.py}：刺激生成器，支持生成 Boxcar（持续）、Impulse（脉冲）及 Continuous（连续）等多种模式的外部输入信号。
+    \item \texttt{dynamics/}：核心动力学方程库。包含神经元群体的突触门控方程以及将神经活动转换为 BOLD 信号的 Balloon-Windkessel 血氧模型实现。
+\end{itemize}
+
+\subsection*{3. 模型训练模块 (training/)}
+\begin{itemize}
+    \item \texttt{train\_fno1d.py}：FNO 模型的训练主程序，包含数据集划分、MSE 损失计算及验证集模型优选逻辑。
+    \item \texttt{train\_deeponet.py} / \texttt{train\_mlp.py}：DeepONet 与 MLP 模型的对应训练脚本。
+    \item \texttt{train\_mlp.py}：MLP 模型的训练主程序。
+    \item \texttt{data\_loader.py}：数据加载工具，负责处理 .pkl 格式的仿真数据，实现时间序列切分与归一化。
+\end{itemize}
+
+\subsection*{4. 评估与反演模块 (evaluation/)}
+\begin{itemize}
+    \item \texttt{run\_inference.py}：推理主脚本。实现了加载预训练模型对真实 fMRI 数据进行反演的核心逻辑，包括报告中提到的“Look-back 回退拼接策略”以处理长序列。
+    \item \texttt{preprocess\_bold.py}：真实数据的预处理脚本，包含 ROI 信号提取及时间序列的线性插值（Upsampling）操作。
+\end{itemize}
+
+\section{仿真数据生成文件（部分示例）}
+存放于data/文件夹，包含ODE+EC，ODE+SC，PDE三种仿真数据集仿真数据样本，由于文件较大，仅上传了几个示例文件。
+
+\section{反演推断结果文件}
+存放于results/文件夹，包含基于ODE+EC，ODE+SC两种连接矩阵训练的FNO模型对真实fMRI数据反演得到的刺激信号数据。
+由于文件较大，仅上传了几个示例文件。
+\section{可视化结果文件}
+存放于visualize/文件夹，可视化包含实验报告中展示的各类可视化图像文件，如时间序列图、玻璃脑激活图谱等。
 \end{document}
