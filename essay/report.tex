@@ -12,7 +12,7 @@
 \geometry{left=2.5cm,right=2.5cm,top=2.5cm,bottom=2.5cm}
 \usepackage{setspace}
 \onehalfspacing
-
+\setlength{\parindent}{2em}
 % ---------- Common Packages ----------
 \usepackage{graphicx}
 \usepackage{booktabs}
@@ -20,14 +20,15 @@
 \usepackage{hyperref}
 \usepackage{cite}
 
+
 % ---------- Title Info ----------
 \title{基于神经算子的数字大脑模型}
 \author{\textbf{小组成员信息}\\
 邓博文（2023K8009910008，dengbowen23@mails.ucas.ac.cn）\\
 王子逸（2023K8009991010，wangziyi236@mails.ucas.ac.cn）\\
 周正凯（2023K8009991019，zhouzhengkai23@mails.ucas.ac.cn）\\
-成员四（学号，邮箱）\\
-成员五（学号，邮箱）\\
+李逸晗（学号，邮箱）\\
+李德琪（2023K8009991020，lideqi23@mails.ucas.ac.cn）\\
 }
 \date{\today}
 
@@ -37,20 +38,27 @@
 
 \begin{abstract}
 
+本文探索利用神经算子构建数字大脑模型。我们基于结构连接（SC）和通过神经扰动推断得到的有效连接（EC）以及MNI 空间皮层表面拉普拉斯算子，利用神经动力学方程（ODE与PDE）生成了包含明确基准真值的仿真数据集。我们分别构建并训练了傅里叶神经算子（FNO）、DeepONet以及多层感知机（MLP）模型，模型训练目标为学习从fMRI BOLD数据到外部输入刺激的反演映射。
+
+我们将训练好的模型迁移至真实fMRI数据应用中，尝试反演103个任务下的潜在刺激模式，并通过对比反演刺激图谱与经验功能激活图谱来评估模型性能。实验结果表明，当前模型反演的刺激分布与真实特定任务的fMRI BOLD数据之间相关性较低。我们最后从仿真数据覆盖度、信号预处理差异、BOLD血氧动力学滞后性等角度深入分析了差异原因，并提出了丰富仿真范式、优化数据处理流程等改进策略。
 \end{abstract}
 
+\newpage
 \section{背景}
 \subsection{数字大脑模型简介}
+
 “数字大脑”（Digital Twin Brain）通常指一个能够在计算机中\emph{近似复现}个体或群体大脑结构与功能的计算模型。它的核心目标不是简单地“画出大脑长什么样”，而是希望在给定结构连接（structural connectivity, SC）、有效/功能连接（effective/functional connectivity, EC/FC）以及外界刺激条件时，能够预测大脑活动如何进行变化，在实现这个之后就能够将模型用于多种途径，如大脑机制解释、疾病模拟与干预评估等。
 
 从建模角度看，数字大脑往往需要同时处理多尺度信息：微观层面的神经元/局部回路，中观层面的脑区动力学，以及宏观层面的全脑网络耦合。传统路线包括基于神经质量模型（neural mass / neural field）或生物物理方程的全脑动力学仿真，以及以数据驱动为主的统计/深度学习预测模型。前者可解释性强但参数多、计算量大并且难以针对单一个体建模；后者预测能力强但往往依赖大量数据、泛化与物理一致性不足。因而，一个现实的挑战是：如何在\emph{可解释/可控}与\emph{可学习/可泛化}之间取得平衡，并让模型能更稳定地迁移到不同个体、不同扫描条件或不同任务状态。
 
 \subsection{神经算子简介}
+
 神经算子（Neural Operator）是一类用神经网络去学习“从函数到函数映射”的方法。与常见的神经网络学习有限维向量到向量的映射不同，神经算子更关注连续对象：例如从初始条件、边界条件等到 PDE 的映射。直观地说，神经算子想学到的是一个“算子”，学会后就可以对新的输入条件快速推断输出，而不需要每次都进行昂贵的重新适配与训练。
 
 典型方法包括 Fourier Neural Operator（FNO）通过频域卷积在全局尺度上建模，适合表达具有较长输入的数据建模；DeepONet 通过分支网络与主干网络分别编码输入函数与查询位置，实现对算子的近似的实现。它们常被强调的一个特性是对分辨率/网格的相对“无关性”：在一定条件下，训练时与测试时的离散网格可以不同，从而更贴近“连续算子”的设定。这一点对于需要在不同空间采样或不同时间步长下工作的神经科学数据建模具有很大的价值。
 
 \subsection{使用神经算子构建数字大脑模型的好处}
+
 将数字大脑问题表述为算子学习问题，有助于把“从结构与状态到脑活动演化”的任务统一成一个可学习的映射框架。相比仅做短期时间序列预测的黑箱模型，神经算子更强调对函数映射的学习，这与脑仿真的目标更一致。具体而言，神经算子路线带来以下优势：
 
 \begin{itemize}
@@ -61,6 +69,7 @@
 基于以上动机和相关论文说明，我们尝试以神经算子为模型，在结构/连接信息与时空脑活动之间建立可泛化的映射，并与基础 MLP 等模型进行对比。
 
 \section{神经算子}
+
 我们尝试了神经算子（FNO 1D 和 DeepONet）和传统的 MLP 神经网络。整体目标是：学习一个从“输入状态/条件”到“输出时空活动/预测量”的映射，并在不同模型之间做对照，进行比较。
 
 \subsection{FNO 1D 模型}
@@ -102,7 +111,7 @@
 \begin{figure}[h]
     \centering
     \includegraphics[width=0.8\textwidth]{images/deeponet.png}
-    \caption{DeepONet 模型结构示意图（概念层级）}
+    \caption{DeepONet 模型结构示意图}
     \label{fig:deeponet_structure}
 \end{figure}
 
@@ -116,7 +125,7 @@
 
 \begin{table}[h]
 \centering
-\caption{DeepONet 模型关键参数与作用（概念层级）}
+\caption{DeepONet 模型关键参数与作用}
 \begin{tabular}{@{}lll@{}}
 \toprule
 参数 & 含义 & 影响/调参直觉 \\ \midrule
@@ -152,11 +161,20 @@
 \end{table}
 
 \section{实验设计与实验方法}
-% 数据来源、预处理、模型结构、训练策略、评价指标等
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.9\textwidth]{images/pipeline.png}
+    \caption{实验流程示意图}
+\end{figure}
 \subsection{连接矩阵计算}
 \subsubsection{结构连接矩阵}
-% dbw
+
+结构连接（Structural Connectivity, SC）刻画了大脑各脑区之间通过白质纤维束连接的物理拓扑结构，是大尺度脑网络动力学模型的基础骨架。在本实验中，我们使用数据集提供的组平均白质结构连接矩阵。我们对原始 SC 矩阵进行了最大值归一化处理。
+
+处理后的 SC 矩阵一方面用于生成基于 ODE 的仿真数据（定义耦合拓扑），另一方面作为“掩膜（Mask）”用于约束有效连接（EC）的稀疏性，即假设无解剖连接的区域间不存在直接的因果作用。
+
 \subsubsection{有效连接矩阵}
+
 有效连接（Effective Connectivity, EC）旨在刻画脑区之间\textbf{有方向性}、可解释为“因果影响”的相互作用强度。本文采用 Luo 等在 Nature Methods 提出的 NPI（Neural Perturbation Inference）框架：先训练一个能够复现统计连接结构的“代理大脑”（surrogate brain），再对该代理模型进行\textbf{虚拟扰动}以得到有向 EC 矩阵\cite{npi}。在推断 EC 前，我们先计算经验功能连接（Functional Connectivity, FC）用于训练监控与一致性验证。
 
 \noindent\textbf{(1) 经验功能连接矩阵（FC）计算：}
@@ -202,15 +220,100 @@ EC_{ij}=\mathbb{E}_t\left[\Delta x^{(i)}_{t+1,j}\right],\quad EC\in\mathbb{R}^{N
 其中 $EC_{ij}$ 表示“脑区 $i$ 影响脑区 $j$”的方向性作用，正/负号可对应兴奋/抑制效应（在代理动力学的意义下）。
 
 \noindent\textbf{(4) 结构连接约束（SC mask）：}
-为保证 EC 的解剖合理性，我们使用二值结构连接矩阵 $SC\in\{0,1\}^{N\times N}$ 作为掩膜（mask），将无结构连边处的 EC 置零：
+为保证 EC 的解剖合理性，我们使用二值结构连接矩阵 $SC\in\{0,1\}^{N\times N}$ 作为掩膜，将无结构连边处的 EC 置零：
 \[
 EC \leftarrow EC\odot SC,
 \]
 其中 $\odot$ 表示逐元素乘法。最终得到满足结构约束的有向 EC 矩阵用于后续分析。
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.6\textwidth]{images/EC.png}
+    \caption{EC矩阵}
+\end{figure}
 \subsubsection{皮层表面拉普拉斯算子}
-% dbw
+为了在皮层表面模拟 PDE 形式的神经动力学，我们在离散三角网格上构建拉普拉斯算子，步骤如下：
+
+\noindent\textbf{(1) 拓扑提取：} 利用 \texttt{nibabel} 读取 MNI 空间皮层表面文件（.gii），获取网格顶点集合 $\mathcal{V}$ 与三角形面集合 $\mathcal{F}$。
+
+\noindent\textbf{(2) 算子构建：} 基于网格连接关系构建稀疏邻接矩阵 $\mathbf{A}$（若顶点相邻则 $A_{ij}=1$）与度矩阵 $\mathbf{D}$（$D_{ii} = \sum_{j} A_{ij}$），进而得到组合图拉普拉斯算子：
+\(
+\mathbf{L} = \mathbf{D} - \mathbf{A}
+\)
+在 PDE 仿真中，该算子 $\mathbf{L}$ 近似表示流形上的 Laplace-Beltrami 算子，用于计算神经活动在皮层表面的空间扩散项 $-k \mathbf{L} \mathbf{x}$。
+
 \subsection{仿真数据生成}
-% dbw
+为了构建具有明确基准真值的数据集以训练神经算子，我们利用神经动力学方程生成了包含结构/有效连接约束的大规模仿真数据。仿真涵盖了基于 ODE 的宏观网络模型和基于 PDE 的皮层连续场模型。
+
+\subsubsection{多样化刺激生成与 BOLD 信号转换}
+为了训练神经算子学习从神经活动到输入刺激的反演映射，我们构建了一个能够生成复杂时空模式的刺激生成器。
+\begin{itemize}
+    \item \textbf{刺激模式：} 包含三种波形：(1) \textbf{Boxcar}：模拟持续性任务激活；(2) \textbf{Impulse}：模拟稀疏事件相关刺激；(3) \textbf{Continuous}：混合正弦波模拟自然持续信号。
+    \item \textbf{观测模型：} 仿真得到的神经活动通过 Balloon-Windkessel 血氧动力学模型转换为 BOLD 信号，该模型包含非线性微分方程组，描述了血流、血容积及脱氧血红蛋白含量的动态变化。
+\end{itemize}
+\subsubsection{基于 ODE 的网络动力学仿真}
+对于基于脑区划分（ROI）的微观/宏观动力学，我们采用经典的 Reduced Wong-Wang (EI) 模型\cite{deco2014}。该模型通过平均场近似描述了每个脑区内兴奋性（E）和抑制性（I）神经元群体的突触门控变量动态。
+
+\textbf{动力学方程：} 对于第 $i$ 个脑区，其状态演化遵循：
+\begin{align}
+    \frac{dS_E^{(i)}}{dt} &= -\frac{S_E^{(i)}}{\tau_E} + (1-S_E^{(i)})\gamma H_E(I_E^{(i)}) \\
+    \frac{dS_I^{(i)}}{dt} &= -\frac{S_I^{(i)}}{\tau_I} + H_I(I_I^{(i)})
+\end{align}
+其中 $S_E, S_I$ 分别为兴奋与抑制突触门控变量。输入电流 $I_E^{(i)}, I_I^{(i)}$ 包含局部耦合、全脑网络耦合及外部刺激：
+\begin{align}
+    I_E^{(i)} &= W_E I_0 + w_{EE} S_E^{(i)} + G J_{NMDA} \sum_{j} C_{ij} S_j^{(i)} - w_{EI} S_I^{(i)} + u^{(i)}(t) + \eta_E(t) \\
+    I_I^{(i)} &= W_I I_0 + w_{IE} S_E^{(i)} - S_I^{(i)} + \eta_I(t)
+\end{align}
+其中 $C_{ij}$ 为连接矩阵，$G$ 为全局耦合强度。外部刺激 $u^{(i)}(t)$ 设计为空间稀疏输入，每次任务事件随机激活 $1 \sim 5$ 个脑区，模拟特定功能的局部激活；噪声项 $\eta(t)$ 为服从 $N(0, 0.02)$ 分布的高斯白噪声，用于模拟神经元群体的背景随机涨落。
+
+\textbf{参数设置：} 时间常数 $\tau_E=100$ ms, $\tau_I=10$ ms；全局耦合强度 $G=0.5$；数值积分步长 $dt=0.5$ ms。我们在两种连接矩阵上生成数据：(1) \textbf{ODE-SC}：使用组平均白质结构连接矩阵；(2) \textbf{ODE-EC}：使用 NPI 推断得到的有效连接矩阵。
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{images/stimulus1.png}
+    \caption{ODE:刺激信号示例}
+    \label{fig:ode_stimulus}
+\end{figure}
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{images/data_ode.png}
+    \caption{ODE:fMRI仿真数据示例}
+    \label{fig:ode_simulation}
+\end{figure}
+
+\subsubsection{基于 PDE 的皮层波动力学仿真}
+为了模拟皮层表面的连续时空神经活动，我们采用定义在流形上的阻尼波动方程，该方程能够生成具有有限传播速度的行波模式，符合皮层神经场理论。
+
+\textbf{动力学方程：} 定义皮层神经场活动 $u(\mathbf{x}, t)$，其演化方程为：
+\[
+\frac{\partial^2 u}{\partial t^2} + \gamma \frac{\partial u}{\partial t} + c^2 \Delta_{\mathcal{M}} u = \alpha \sigma(u) + I_{stim}(\mathbf{x}, t) + \xi(\mathbf{x}, t)
+\]
+离散化形式基于图拉普拉斯算子 $\mathbf{L}$：
+\[
+\frac{d\mathbf{v}}{dt} = -\gamma \mathbf{v} - c^2 \mathbf{L}\mathbf{u} + \alpha \sigma(\mathbf{u}) + \mathbf{u}_{ext}(t)
+\]
+其中 $v = \dot{u}$，$\gamma$ 为阻尼系数，$c$ 为波速，$\sigma(\cdot)$ 为 Sigmoid 非线性激活函数。外部输入 $\mathbf{u}_{ext}(t)$ 包含两部分：(1) 任务刺激 $I_{stim}$，其空间分布由 $1 \sim 5$ 个随机顶点为中心的高斯核定义，模拟皮层上的局部兴奋源；(2) 时空噪声场 $\xi$，在每个网格点独立采样自 $N(0, 0.01)$，为系统引入持续的随机扰动。
+
+\textbf{参数设置：} 阻尼系数 $\gamma = 0.23 \, \text{ms}^{-1}$，波速 $c = 2.0 \, \text{mm/ms}$，非线性增益 $\alpha = 100.0$。仿真在包含约 3万顶点的左半球皮层网格上进行。
+
+
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{images/stimulus_pde.png}
+    \caption{PDE:刺激信号示例}
+    \label{fig:pde_stimulus}
+\end{figure}
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{images/stimulus_pde2.png}
+    \caption{PDE:刺激信号空间分布示例}
+    \label{fig:pde_stimulus2}
+\end{figure}
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.\textwidth]{images/data_pde.png}
+    \caption{PDE:fMRI仿真数据示例}
+    \label{fig:pde_simulation}
+\end{figure}
 \subsection{模型训练}
 \subsubsection{数据加载}
 
@@ -227,7 +330,7 @@ EC \leftarrow EC\odot SC,
 
 \begin{table}[h]
 \centering
-\caption{数据加载与切分的关键设置（概念层级）}
+\caption{数据加载与切分的关键设置}
 \begin{tabular}{@{}lll@{}}
 \toprule
 设置项 & 默认/取值 & 作用说明 \\ \midrule
@@ -250,7 +353,7 @@ FNO（1D）将时间序列视为一维网格上的多通道函数，学习从信
 
 \begin{table}[h]
 \centering
-\caption{FNO 训练设置与超参数（默认值，概念层级）}
+\caption{FNO 训练设置与超参数}
 \begin{tabular}{@{}lll@{}}
 \toprule
 项目 & 设置/默认值 & 说明 \\ \midrule
@@ -279,7 +382,7 @@ DeepONet 将“输入函数”和“查询坐标”分开编码：分支网络�
 
 \begin{table}[h]
 \centering
-\caption{DeepONet 训练设置与超参数（默认值，概念层级）}
+\caption{DeepONet 训练设置与超参数}
 \begin{tabular}{@{}lll@{}}
 \toprule
 项目 & 设置/默认值 & 说明 \\ \midrule
@@ -306,7 +409,7 @@ MLP 作为基线模型，不显式利用算子结构与频域归纳偏置，而�
 
 \begin{table}[h]
 \centering
-\caption{MLP 训练设置与超参数（默认值，概念层级）}
+\caption{MLP 训练设置与超参数}
 \begin{tabular}{@{}lll@{}}
 \toprule
 项目 & 设置/默认值 & 说明 \\ \midrule
@@ -327,25 +430,94 @@ MLP 作为基线模型，不显式利用算子结构与频域归纳偏置，而�
 \subsection{fMRI数据输入预测}
 % lyh
 \subsection{可视化与一致性分析}
-% ldq
-\section{实验结果}
-% ldq & dbw
+为验证模型输出与真实脑活动的匹配程度，我们从时间维度和空间维度开展可视化分析，并通过相关性量化一致性水平。
+
+\subsubsection{可视化方法}
+\paragraph{1. 时间维度}
+以 \textit{trial type} 作为区分锚点，将每个脑区的刺激强度在时间上与 \textit{task} 对应，绘制出各个脑区刺激强度在每种 \textit{trial} 中随时间的变化曲线，重点分析单个脑区在不同任务范式下的时序响应特征，捕捉刺激信号的动态变化规律。
+
+\paragraph{2. 空间维度}
+基于 \textit{brainspace} 库实现全脑尺度的空间可视化：对每种 \textit{task} 中全脑区的平均信号强度进行建模，将数值映射为玻璃脑的颜色梯度，直观呈现不同任务下全脑激活的空间分布模式，对比真实功能图谱与模型预测图谱的空间一致性。
+
+\subsubsection{功能图谱计算}
+\paragraph{1. 真实功能图谱（Functional Activation Map）}
+来源为真实 BOLD 数据，计算方式为对任务时间窗内的 BOLD 信号取均值，并减去非任务时间窗的均值：
+\[
+\text{FuncMap}(k) = \mathbb{E}\left[x(t) \mid \text{task on}\right] - \mathbb{E}\left[x(t) \mid \text{task off}\right]
+\]
+其中 $k$ 代表脑区编号，$x(t)$ 为脑区 $k$ 在时刻 $t$ 的 BOLD 信号值，该图谱反映脑区在任务态下的真实激活强度。
+
+\paragraph{2. 刺激图谱（Stimulus Map）}
+来源为模型反演的刺激数据，计算方法与功能图谱一致：对任务时间窗内的反演刺激信号取均值，并减去非任务时间窗的均值：
+\[
+\text{StimMap}(k) = \mathbb{E}\left[\hat{u}(t) \mid \text{task on}\right] - \mathbb{E}\left[\hat{u}(t) \mid \text{task off}\right]
+\]
+其中 $\hat{u}(t)$ 为模型预测的脑区 $k$ 在时刻 $t$ 的刺激信号值，用于与真实功能图谱做空间和数值对比。
+
+\subsubsection{实验结果与一致性分析}
+对数据集中AnimalPhoto任务两个脑区的fMRI数据进行了可视化，如图\ref{fig:time_series}和\ref{fig:time_series2}所示。
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.5\textwidth]{images/脑区1_animak_photo_bold.png}
+    \caption{AnimalPhoto任务下的脑区1的fMRI数据可视化}
+    \label{fig:time_series}
+\end{figure}
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.5\textwidth]{images/脑区3_animal_photo_bold.png}
+    \caption{AnimalPhoto任务下的脑区3的fMRI数据可视化}
+    \label{fig:time_series2}
+\end{figure}
+对反演结果AnimalPhoto，StateMap，RateBeautyMov与Recipe任务的玻璃脑激活图谱进行了可视化，如图\ref{fig:glassbrain2}和图\ref{fig:glassbrain1}所示。
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.88\textwidth]{images/玻璃脑2.png}
+    \caption{AnimalPhoto 与 StateMap 任务反演预测的玻璃脑激活图谱}
+    \label{fig:glassbrain2}
+\end{figure}
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.9\textwidth]{images/玻璃脑1.png}
+    \caption{RateBeautyMov 与 Recipe 任务反演预测的玻璃脑激活图谱}
+    \label{fig:glassbrain1}
+\end{figure}
+根据brainspace库可视化结果，发现基于EC和SC训练的神经算子反演的刺激图谱没有展现较高的相似度。此外，反演的刺激图谱在空间分布上均与真实功能图谱存在较大差异，为量化两者间的相关性，
+我们以AnimalPhoto任务为例，用基于EC的神经算子反演刺激强度对真实fMRI数据回归,结果如表\ref{tab:correlation}所示。
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.6\textwidth]{images/AnimalPhoto_UvsBOLD散点图.png}
+    \caption{真实功能图谱与刺激图谱的相关系数}
+    \label{tab:correlation}
+\end{figure}
+统计结果显示p=0.6,说明两者之间几乎不存在线性相关性。103个任务的回归分析见附件部分，均显示出较低的相关性。
+
 
 \section{讨论}
-% every one （最后再写）
-\subsection{结果的意义}
-\subsection{不足}
-\subsection{展望}
+从一致性分析结果可知，模型预测的刺激图谱和预测图谱之间几乎不存在线性相关性，我们尝试从实验流程各个阶段考虑原因：
+\begin{itemize}
+    \item \textbf{连接矩阵}：EC矩阵和SC矩阵均使用相同的E-I方程进行仿真，但两种矩阵的数值差异可能造成一定影响，导致基于EC和SC训练的神经算子反演结果相似度较低。
+    \item \textbf{仿真数据}：模拟刺激种类有限，当前只考虑了三种刺激，仅使用了简单的白噪声；刺激作用的脑区为随机选择的1-5个脑区，本实验希望通过增加仿真数据量实现全脑区和不同组合脑区的覆盖，但仅1000组仿真数据无法实现不同组合脑区组合的全覆盖；仿真数据的动力学方程参数设置可能与真实大脑动力学差异较大，导致生成的BOLD信号与真实信号在统计特性上存在偏差，并且随着时间累计差异进一步增大。
+    \item \textbf{模型训练}：神经算子模型的超参数设置（如隐空间宽度、频域模态数等）可能未能充分挖掘数据中的潜在模式，导致模型表达能力不足；训练轮数较少可能未能使模型充分收敛，影响预测性能。
+    \item \textbf{fMRi数据反演}：真实fMRI数据为低频(2s)采样信号,当前通过简单线性插值恢复到高频(0.5ms)信号，插值方法可能未能有效捕捉真实信号的动态特性，影响模型输入的质量；fMRI BOLD 信号天然包含生理噪声与扫描设备噪声，模型在反演是没有对这类非任务相关噪声进行处理。
+    \item \textbf{一致性分析}：刺激图谱使用刺激信号，真实图谱使用BOLD信号，BOLD信号一般存在滞后效应，二者在时间上存在偏移，直接计算空间相关性可能低估了真实一致性水平；当前的刺激图谱和真实功能图谱均采用简单的均值差分计算，可能未能充分捕捉复杂的任务相关激活模式，影响一致性评估的准确性。
+\end{itemize}
 
-\section{结论}
-% 可选
+本次实验虽然未能实现预期的一致性，但分析整个实验流程的问题后，我们认为可以从以下几个方面进行改进：
+\begin{itemize}
+    \item \textbf{丰富仿真数据}：增加仿真数据量，覆盖更多脑区组合和刺激模式；利用脑区先验，如预先计算各任务的活跃脑区，在仿真数据中针对性施加刺激，根据任务需求设计刺激方案；引入更复杂的噪声模型，模拟更接近真实大脑环境的背景活动；调整动力学方程参数，使生成的BOLD信号在统计特性上更接近真实信号。
+    \item \textbf{优化模型训练}：调整神经算子模型的超参数，如增加隐空间宽度和频域模态数，以提升模型的表达能力；增加训练轮数，确保模型充分收敛；尝试不同的优化器和学习率调度策略，以改善训练过程。
+    \item \textbf{改进fMRI数据处理}：采用更先进的插值方法，如基于小波变换或深度学习的方法，以更准确地恢复高频信号特性；在反演前对fMRI数据进行更细致的预处理，减弱生理噪声和扫描设备噪声，提高输入数据质量。
+    \item \textbf{完善一致性分析}：考虑BOLD信号的滞后效应，在计算空间相关性时引入时间偏移校正；采用更复杂的功能图谱计算方法，如GLM分析等，以更准确地捕捉任务相关激活模式，提高一致性评估的准确性。    
+\end{itemize}
 
-\section*{致谢}
+
 \subsection{分工}
 \begin{itemize}
     \item 邓博文：整体分工与进度把控；数据下载；仿真数据生成。
     \item 王子逸：进行模型设计与训练；设计基础模型mlp，神经算子模型fno，deeponet等并进行对比实验；设计实验报告模板并加入编辑报告。
     \item 周正凯：连接矩阵计算；模型训练代码编写与调试；实验结果可视化与分析。
+    \item 李逸晗：fMRI数据处理；使用预训练模型完成反演任务。
+    \item 李德琪：实验结果可视化；一致性分析。
 \end{itemize}
 
 \begin{thebibliography}{99}
